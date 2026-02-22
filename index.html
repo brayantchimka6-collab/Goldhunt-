@@ -6,20 +6,18 @@
     <title>GoldHunt - Tap to Earn</title>
     <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600;700;800&display=swap" rel="stylesheet">
     
-    <!-- 1. TELEGRAM WEBAPP SCRIPT (Hook Bridge) -->
+    <!-- TELEGRAM WEBAPP SCRIPT -->
     <script src="https://telegram.org/js/telegram-web-app.js"></script>
     
     <!-- TON Connect UI -->
     <script src="https://unpkg.com/@tonconnect/ui@latest/dist/tonconnect-ui.min.js"></script>
     
-    <!-- 2. FIREBASE MODULE WITH PROPER HOOK -->
+    <!-- FIREBASE MODULE -->
     <script type="module">
-        // Import Firebase functions (v12.9.0)
         import { initializeApp } from "https://www.gstatic.com/firebasejs/12.9.0/firebase-app.js";
         import { getAnalytics } from "https://www.gstatic.com/firebasejs/12.9.0/firebase-analytics.js";
         import { getDatabase, ref, set, get, update, onValue, serverTimestamp } from "https://www.gstatic.com/firebasejs/12.9.0/firebase-database.js";
         
-        // Your Firebase config
         const firebaseConfig = {
             apiKey: "AIzaSyCLsEBXOrhtQaTg9LoXnVmGj3UIYrvhoeY",
             authDomain: "goldhunt-4e6f0.firebaseapp.com",
@@ -30,39 +28,26 @@
             measurementId: "G-L0XTTGL59L"
         };
 
-        // Initialize Firebase
         const app = initializeApp(firebaseConfig);
         const analytics = getAnalytics(app);
         const database = getDatabase(app);
         
-        // ============================================
-        // THE HOOK: Wait for Telegram to be ready
-        // ============================================
-        
         function initializeTelegramHook() {
-            // Check if Telegram WebApp is available
             if (!window.Telegram || !window.Telegram.WebApp) {
-                console.error("❌ Telegram WebApp not found! Retrying in 500ms...");
                 setTimeout(initializeTelegramHook, 500);
                 return;
             }
             
             const tg = window.Telegram.WebApp;
-            
-            // Tell Telegram the app is ready
             tg.ready();
             tg.expand();
             
-            console.log("✅ Telegram WebApp initialized");
-            
-            // Capture Telegram User Data (THE HOOK)
             const telegramUser = tg.initDataUnsafe?.user;
             const telegramId = telegramUser?.id;
             const playerName = telegramUser?.first_name || "Guest";
             const username = telegramUser?.username || `user_${telegramId || Date.now()}`;
             const startParam = tg.initDataUnsafe?.start_param;
             
-            // Make everything available globally for game script
             window.firebaseDB = database;
             window.firebaseRef = ref;
             window.firebaseSet = set;
@@ -78,24 +63,16 @@
             
             if (startParam) {
                 window.referralCode = startParam;
-                console.log("🎁 Referral code detected:", startParam);
             }
             
-            console.log("🔑 Telegram ID:", telegramId);
-            console.log("👤 Username:", username);
-            
-            // Initialize Firebase user if we have Telegram ID
             if (telegramId) {
                 initializeFirebaseUser(telegramId, username, playerName);
             } else {
-                console.warn("⚠️ No Telegram ID - running in test mode");
                 window.telegramId = 'test_' + Date.now();
                 window.username = 'TestUser';
             }
             
-            // Dispatch event so game script knows hook is ready
             window.dispatchEvent(new Event('firebaseHookReady'));
-            console.log("🚀 Firebase Hook Ready event dispatched");
         }
         
         async function initializeFirebaseUser(telegramId, username, playerName) {
@@ -104,7 +81,6 @@
                 const snapshot = await get(userRef);
                 
                 if (!snapshot.exists()) {
-                    // New user - create record
                     await set(userRef, {
                         telegramId: telegramId,
                         username: username,
@@ -115,16 +91,12 @@
                         createdAt: serverTimestamp(),
                         lastUpdated: serverTimestamp()
                     });
-                    console.log("✅ New user created in Firebase");
-                } else {
-                    console.log("✅ Existing user loaded from Firebase");
                 }
             } catch (error) {
-                console.error("❌ Firebase user init error:", error);
+                console.error("Firebase user init error:", error);
             }
         }
         
-        // Start the hook initialization
         initializeTelegramHook();
     </script>
     
@@ -189,7 +161,6 @@
             background-clip: text;
         }
 
-        /* TON Connect Button */
         #ton-connect {
             transform: scale(0.85);
         }
@@ -343,75 +314,440 @@
             transition: width 0.3s ease;
         }
 
-        /* Gold Coin Container */
-        .coin-container {
+        /* GOLD THIEF CHARACTER CONTAINER */
+        .character-container {
             position: relative;
-            width: 220px;
-            height: 220px;
+            width: 240px;
+            height: 240px;
             cursor: pointer;
-            transition: transform 0.1s ease;
+            transition: transform 0.1s cubic-bezier(0.68, -0.55, 0.265, 1.55);
         }
 
-        .coin-container:active {
-            transform: scale(0.92);
+        .character-container:active {
+            transform: scale(0.92) translateY(10px);
         }
 
-        .gold-coin {
+        .character-container.tapping {
+            animation: character-bounce 0.3s ease-out;
+        }
+
+        @keyframes character-bounce {
+            0% { transform: scale(1) translateY(0); }
+            40% { transform: scale(0.85) translateY(20px); }
+            60% { transform: scale(1.05) translateY(-10px); }
+            100% { transform: scale(1) translateY(0); }
+        }
+
+        /* Character Shadow */
+        .character-shadow {
+            position: absolute;
+            bottom: 10px;
+            left: 50%;
+            transform: translateX(-50%);
+            width: 140px;
+            height: 30px;
+            background: radial-gradient(ellipse, rgba(0,0,0,0.4) 0%, transparent 70%);
+            border-radius: 50%;
+            transition: all 0.3s ease;
+        }
+
+        .character-container:active .character-shadow {
+            transform: translateX(-50%) scale(0.8);
+            opacity: 0.6;
+        }
+
+        /* Main Character Body */
+        .thief-character {
             width: 100%;
             height: 100%;
             position: relative;
+            animation: idle-float 3s ease-in-out infinite;
         }
 
-        .coin-outer {
-            width: 100%;
-            height: 100%;
-            background: linear-gradient(135deg, #ffd700 0%, #ffaa00 30%, #ffd700 50%, #b8860b 100%);
-            border-radius: 50%;
-            display: flex;
-            align-items: center;
-            justify-content: center;
+        @keyframes idle-float {
+            0%, 100% { transform: translateY(0px) rotate(0deg); }
+            25% { transform: translateY(-8px) rotate(-1deg); }
+            75% { transform: translateY(-5px) rotate(1deg); }
+        }
+
+        .character-container.tapping .thief-character {
+            animation: none;
+        }
+
+        /* Character Base (Body) */
+        .thief-body {
+            position: absolute;
+            bottom: 30px;
+            left: 50%;
+            transform: translateX(-50%);
+            width: 160px;
+            height: 140px;
+            background: linear-gradient(135deg, #8B4513 0%, #A0522D 50%, #654321 100%);
+            border-radius: 50% 50% 45% 45%;
             box-shadow: 
-                0 0 60px rgba(255, 215, 0, 0.5),
-                0 10px 40px rgba(0, 0, 0, 0.4),
-                inset -5px -5px 20px rgba(0, 0, 0, 0.3),
-                inset 5px 5px 20px rgba(255, 255, 255, 0.4);
-            border: 8px solid #daa520;
-            position: relative;
+                0 10px 30px rgba(0,0,0,0.4),
+                inset -5px -5px 15px rgba(0,0,0,0.3),
+                inset 5px 5px 15px rgba(255,255,255,0.1);
+            border: 3px solid #5D3A1A;
+            overflow: hidden;
         }
 
-        .coin-inner {
-            width: 75%;
-            height: 75%;
-            background: linear-gradient(135deg, #ffec8b 0%, #ffd700 50%, #daa520 100%);
+        /* Belly/Chest */
+        .thief-belly {
+            position: absolute;
+            bottom: 10px;
+            left: 50%;
+            transform: translateX(-50%);
+            width: 100px;
+            height: 80px;
+            background: linear-gradient(135deg, #D2691E 0%, #CD853F 100%);
             border-radius: 50%;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            border: 4px solid #b8860b;
-            position: relative;
+            opacity: 0.6;
         }
 
-        .coin-inner::before {
+        /* Character Head */
+        .thief-head {
+            position: absolute;
+            top: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            width: 130px;
+            height: 110px;
+            background: linear-gradient(135deg, #8B4513 0%, #A0522D 50%, #654321 100%);
+            border-radius: 50%;
+            border: 3px solid #5D3A1A;
+            box-shadow: 
+                0 5px 20px rgba(0,0,0,0.3),
+                inset -3px -3px 10px rgba(0,0,0,0.2);
+            z-index: 10;
+        }
+
+        /* Ears */
+        .ear {
+            position: absolute;
+            width: 35px;
+            height: 35px;
+            background: linear-gradient(135deg, #8B4513, #654321);
+            border-radius: 50% 50% 0 0;
+            border: 2px solid #5D3A1A;
+            top: -5px;
+        }
+
+        .ear.left {
+            left: 15px;
+            transform: rotate(-20deg);
+        }
+
+        .ear.right {
+            right: 15px;
+            transform: rotate(20deg);
+        }
+
+        .ear-inner {
+            position: absolute;
+            bottom: 5px;
+            left: 50%;
+            transform: translateX(-50%);
+            width: 20px;
+            height: 20px;
+            background: #D2691E;
+            border-radius: 50% 50% 0 0;
+            opacity: 0.7;
+        }
+
+        /* Face Features */
+        .face {
+            position: absolute;
+            top: 35px;
+            left: 50%;
+            transform: translateX(-50%);
+            width: 90px;
+            height: 60px;
+        }
+
+        /* Eyes */
+        .eye {
+            position: absolute;
+            width: 28px;
+            height: 32px;
+            background: #fff;
+            border-radius: 50%;
+            top: 0;
+            border: 2px solid #333;
+            overflow: hidden;
+            animation: blink 4s infinite;
+        }
+
+        @keyframes blink {
+            0%, 96%, 100% { transform: scaleY(1); }
+            98% { transform: scaleY(0.1); }
+        }
+
+        .eye.left { left: 8px; }
+        .eye.right { right: 8px; }
+
+        .pupil {
+            position: absolute;
+            width: 14px;
+            height: 18px;
+            background: linear-gradient(135deg, #4A3000, #2A1A00);
+            border-radius: 50%;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            transition: all 0.3s ease;
+        }
+
+        .pupil::after {
             content: '';
             position: absolute;
-            width: 85%;
-            height: 85%;
-            border: 2px dashed #b8860b;
+            width: 6px;
+            height: 8px;
+            background: #fff;
             border-radius: 50%;
+            top: 3px;
+            right: 3px;
         }
 
-        .coin-symbol {
-            font-size: 80px;
-            font-weight: 800;
-            color: #b8860b;
-            text-shadow: 2px 2px 4px rgba(255, 255, 255, 0.5), -1px -1px 2px rgba(0, 0, 0, 0.3);
+        /* Eye Mask (Thief Style) */
+        .eye-mask {
+            position: absolute;
+            top: 28px;
+            left: 50%;
+            transform: translateX(-50%);
+            width: 80px;
+            height: 25px;
+            background: linear-gradient(135deg, #2C2C2C, #1A1A1A);
+            border-radius: 0 0 40% 40%;
+            z-index: 5;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.3);
         }
+
+        .mask-tie {
+            position: absolute;
+            top: 50%;
+            width: 20px;
+            height: 3px;
+            background: #1A1A1A;
+        }
+
+        .mask-tie.left {
+            left: -15px;
+            transform: rotate(-20deg);
+        }
+
+        .mask-tie.right {
+            right: -15px;
+            transform: rotate(20deg);
+        }
+
+        /* Nose */
+        .nose {
+            position: absolute;
+            top: 42px;
+            left: 50%;
+            transform: translateX(-50%);
+            width: 12px;
+            height: 10px;
+            background: linear-gradient(135deg, #FF6B6B, #EE5A24);
+            border-radius: 50%;
+            z-index: 6;
+        }
+
+        /* Mouth */
+        .mouth {
+            position: absolute;
+            bottom: 5px;
+            left: 50%;
+            transform: translateX(-50%);
+            width: 30px;
+            height: 15px;
+            border-bottom: 3px solid #333;
+            border-radius: 0 0 50% 50%;
+            transition: all 0.2s ease;
+        }
+
+        .character-container:active .mouth {
+            width: 40px;
+            height: 20px;
+            border-bottom-width: 4px;
+        }
+
+        /* Whiskers */
+        .whiskers {
+            position: absolute;
+            top: 50px;
+            left: 50%;
+            transform: translateX(-50%);
+            width: 100%;
+            height: 20px;
+        }
+
+        .whisker {
+            position: absolute;
+            width: 25px;
+            height: 2px;
+            background: rgba(0,0,0,0.3);
+            top: 50%;
+        }
+
+        .whisker.left {
+            left: -10px;
+            transform-origin: right center;
+        }
+
+        .whisker.right {
+            right: -10px;
+            transform-origin: left center;
+        }
+
+        .whisker.left:nth-child(1) { transform: rotate(10deg); }
+        .whisker.left:nth-child(2) { transform: rotate(0deg); top: 60%; }
+        .whisker.right:nth-child(3) { transform: rotate(-10deg); }
+        .whisker.right:nth-child(4) { transform: rotate(0deg); top: 60%; }
+
+        /* Hat (Thief Beanie) */
+        .thief-hat {
+            position: absolute;
+            top: -15px;
+            left: 50%;
+            transform: translateX(-50%);
+            width: 100px;
+            height: 50px;
+            background: linear-gradient(135deg, #2C2C2C, #1A1A1A);
+            border-radius: 50% 50% 0 0;
+            z-index: 15;
+            box-shadow: 0 3px 10px rgba(0,0,0,0.3);
+        }
+
+        .hat-brim {
+            position: absolute;
+            bottom: 0;
+            left: 50%;
+            transform: translateX(-50%);
+            width: 110px;
+            height: 20px;
+            background: linear-gradient(135deg, #3C3C3C, #2A2A2A);
+            border-radius: 50%;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.2);
+        }
+
+        /* Arms */
+        .arm {
+            position: absolute;
+            width: 40px;
+            height: 70px;
+            background: linear-gradient(135deg, #8B4513, #654321);
+            border-radius: 20px;
+            top: 80px;
+            border: 2px solid #5D3A1A;
+            z-index: 5;
+            transition: all 0.3s ease;
+            transform-origin: top center;
+        }
+
+        .arm.left {
+            left: 20px;
+            transform: rotate(20deg);
+        }
+
+        .arm.right {
+            right: 20px;
+            transform: rotate(-20deg);
+        }
+
+        .character-container:active .arm.left {
+            transform: rotate(40deg) translateY(10px);
+        }
+
+        .character-container:active .arm.right {
+            transform: rotate(-40deg) translateY(10px);
+        }
+
+        /* Paws */
+        .paw {
+            position: absolute;
+            bottom: -10px;
+            left: 50%;
+            transform: translateX(-50%);
+            width: 30px;
+            height: 25px;
+            background: linear-gradient(135deg, #CD853F, #8B4513);
+            border-radius: 50%;
+            border: 2px solid #5D3A1A;
+        }
+
+        /* Gold Bag */
+        .gold-bag {
+            position: absolute;
+            bottom: 20px;
+            right: 10px;
+            width: 60px;
+            height: 70px;
+            background: linear-gradient(135deg, #DAA520, #B8860B);
+            border-radius: 10px 10px 30% 30%;
+            border: 3px solid #8B6914;
+            z-index: 8;
+            transform: rotate(15deg);
+            box-shadow: 0 5px 15px rgba(0,0,0,0.3);
+            animation: bag-sway 2s ease-in-out infinite;
+        }
+
+        @keyframes bag-sway {
+            0%, 100% { transform: rotate(15deg) translateY(0); }
+            50% { transform: rotate(10deg) translateY(-5px); }
+        }
+
+        .bag-top {
+            position: absolute;
+            top: -10px;
+            left: 50%;
+            transform: translateX(-50%);
+            width: 50px;
+            height: 20px;
+            background: linear-gradient(135deg, #8B6914, #654321);
+            border-radius: 50%;
+            border: 2px solid #5D3A1A;
+        }
+
+        .bag-dollar {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            font-size: 24px;
+            font-weight: 800;
+            color: #FFD700;
+            text-shadow: 1px 1px 2px rgba(0,0,0,0.5);
+        }
+
+        /* Sparkle Effects */
+        .sparkle {
+            position: absolute;
+            width: 20px;
+            height: 20px;
+            background: radial-gradient(circle, #FFD700 0%, transparent 70%);
+            border-radius: 50%;
+            pointer-events: none;
+            opacity: 0;
+            animation: sparkle-anim 2s ease-in-out infinite;
+        }
+
+        @keyframes sparkle-anim {
+            0%, 100% { opacity: 0; transform: scale(0) rotate(0deg); }
+            50% { opacity: 1; transform: scale(1) rotate(180deg); }
+        }
+
+        .sparkle:nth-child(1) { top: 10%; left: 10%; animation-delay: 0s; }
+        .sparkle:nth-child(2) { top: 20%; right: 15%; animation-delay: 0.5s; }
+        .sparkle:nth-child(3) { bottom: 30%; left: 5%; animation-delay: 1s; }
+        .sparkle:nth-child(4) { bottom: 20%; right: 10%; animation-delay: 1.5s; }
 
         /* Booster Ring */
         .booster-ring {
             position: absolute;
-            width: 260px;
-            height: 260px;
+            width: 280px;
+            height: 280px;
             border: 5px solid transparent;
             border-radius: 50%;
             top: 50%;
@@ -434,7 +770,7 @@
         /* Booster Timer */
         .booster-timer {
             position: absolute;
-            top: -35px;
+            top: -40px;
             left: 50%;
             transform: translateX(-50%);
             background: linear-gradient(135deg, #ff00ff, #ff0066);
@@ -445,6 +781,7 @@
             display: none;
             animation: glow 0.5s ease-in-out infinite alternate;
             white-space: nowrap;
+            z-index: 20;
         }
 
         .booster-timer.active {
@@ -459,7 +796,7 @@
         /* Autoclicker Indicator */
         .autoclicker-indicator {
             position: absolute;
-            bottom: -45px;
+            bottom: -50px;
             left: 50%;
             transform: translateX(-50%);
             background: linear-gradient(135deg, #00ff88, #00cc6a);
@@ -469,6 +806,7 @@
             font-size: 14px;
             display: none;
             animation: autoclicker-glow 1s ease-in-out infinite alternate;
+            z-index: 20;
         }
 
         .autoclicker-indicator.active {
@@ -484,7 +822,7 @@
         .floating-gold {
             position: absolute;
             font-weight: 800;
-            font-size: 22px;
+            font-size: 24px;
             color: #ffd700;
             pointer-events: none;
             animation: float-up 1s ease-out forwards;
@@ -507,7 +845,7 @@
         .energy-section {
             width: 100%;
             max-width: 300px;
-            margin-top: 50px;
+            margin-top: 60px;
         }
 
         .energy-header {
@@ -1231,15 +1569,23 @@
             transform: translateX(-50%) translateY(0);
         }
 
-        /* Particle Effect */
+        /* Particle Effects */
         .particle {
             position: absolute;
             width: 12px;
             height: 12px;
-            background: #ffd700;
-            border-radius: 50%;
             pointer-events: none;
             animation: particle-fade 0.6s ease-out forwards;
+        }
+
+        .particle.gold {
+            background: radial-gradient(circle, #FFD700, #FFA500);
+            border-radius: 50%;
+        }
+
+        .particle.sparkle {
+            background: #fff;
+            clip-path: polygon(50% 0%, 61% 35%, 98% 35%, 68% 57%, 79% 91%, 50% 70%, 21% 91%, 32% 57%, 2% 35%, 39% 35%);
         }
 
         @keyframes particle-fade {
@@ -1250,6 +1596,40 @@
             100% {
                 opacity: 0;
                 transform: scale(0) translate(var(--tx), var(--ty));
+            }
+        }
+
+        /* Coin burst effect on tap */
+        .coin-burst {
+            position: absolute;
+            width: 40px;
+            height: 40px;
+            background: radial-gradient(circle, #FFD700, #B8860B);
+            border-radius: 50%;
+            border: 3px solid #DAA520;
+            pointer-events: none;
+            animation: coin-burst-anim 0.8s ease-out forwards;
+            z-index: 50;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: 800;
+            color: #8B6914;
+            font-size: 18px;
+        }
+
+        @keyframes coin-burst-anim {
+            0% {
+                opacity: 1;
+                transform: scale(0.5) translateY(0);
+            }
+            50% {
+                opacity: 1;
+                transform: scale(1.2) translateY(-30px);
+            }
+            100% {
+                opacity: 0;
+                transform: scale(0.8) translateY(-60px);
             }
         }
 
@@ -1315,18 +1695,34 @@
 
         /* Responsive */
         @media (max-width: 480px) {
-            .coin-container {
-                width: 180px;
-                height: 180px;
+            .character-container {
+                width: 200px;
+                height: 200px;
             }
 
-            .coin-symbol {
-                font-size: 60px;
+            .thief-body {
+                width: 130px;
+                height: 115px;
+            }
+
+            .thief-head {
+                width: 105px;
+                height: 90px;
             }
 
             .gold-amount {
                 font-size: 32px;
             }
+        }
+
+        /* Eye tracking animation */
+        .eye-tracking {
+            position: absolute;
+            width: 100%;
+            height: 100%;
+            top: 0;
+            left: 0;
+            pointer-events: none;
         }
     </style>
 </head>
@@ -1345,10 +1741,9 @@
         <!-- Header -->
         <div class="header">
             <div class="logo">
-                <div class="logo-icon">🪙</div>
+                <div class="logo-icon">🦝</div>
                 <div class="logo-text">GoldHunt</div>
             </div>
-            <!-- TON Connect Button -->
             <div id="ton-connect"></div>
         </div>
 
@@ -1393,14 +1788,68 @@
                     </div>
                 </div>
 
-                <div class="coin-container" id="coinContainer">
+                <!-- Animated Gold Thief Character -->
+                <div class="character-container" id="characterContainer">
                     <div class="booster-ring" id="boosterRing"></div>
                     <div class="booster-timer" id="boosterTimer">50x: 40s</div>
                     <div class="autoclicker-indicator" id="autoclickerIndicator">🤖 Auto: 24h</div>
-                    <div class="gold-coin">
-                        <div class="coin-outer">
-                            <div class="coin-inner">
-                                <div class="coin-symbol">G</div>
+                    
+                    <!-- Sparkle Effects -->
+                    <div class="sparkle"></div>
+                    <div class="sparkle"></div>
+                    <div class="sparkle"></div>
+                    <div class="sparkle"></div>
+                    
+                    <div class="thief-character" id="thiefCharacter">
+                        <!-- Shadow -->
+                        <div class="character-shadow"></div>
+                        
+                        <!-- Gold Bag -->
+                        <div class="gold-bag">
+                            <div class="bag-top"></div>
+                            <div class="bag-dollar">$</div>
+                        </div>
+                        
+                        <!-- Arms -->
+                        <div class="arm left">
+                            <div class="paw"></div>
+                        </div>
+                        <div class="arm right">
+                            <div class="paw"></div>
+                        </div>
+                        
+                        <!-- Body -->
+                        <div class="thief-body">
+                            <div class="thief-belly"></div>
+                        </div>
+                        
+                        <!-- Head -->
+                        <div class="thief-head">
+                            <div class="ear left"><div class="ear-inner"></div></div>
+                            <div class="ear right"><div class="ear-inner"></div></div>
+                            
+                            <div class="thief-hat">
+                                <div class="hat-brim"></div>
+                            </div>
+                            
+                            <div class="face">
+                                <div class="eye left"><div class="pupil"></div></div>
+                                <div class="eye right"><div class="pupil"></div></div>
+                                
+                                <div class="eye-mask">
+                                    <div class="mask-tie left"></div>
+                                    <div class="mask-tie right"></div>
+                                </div>
+                                
+                                <div class="nose"></div>
+                                <div class="mouth"></div>
+                                
+                                <div class="whiskers">
+                                    <div class="whisker left"></div>
+                                    <div class="whisker left"></div>
+                                    <div class="whisker right"></div>
+                                    <div class="whisker right"></div>
+                                </div>
                             </div>
                         </div>
                     </div>
@@ -1448,7 +1897,6 @@
                 <div class="next-checkin" id="nextCheckin"></div>
             </div>
 
-            <!-- AdsGram Placeholder -->
             <div class="adsgram-placeholder">
                 <div class="adsgram-label">Advertisement</div>
                 <div class="adsgram-text">AdsGram Integration Space</div>
@@ -1479,7 +1927,6 @@
                 <button class="task-btn" id="telegramBtn">Join</button>
             </div>
 
-            <!-- AdsGram Placeholder -->
             <div class="adsgram-placeholder">
                 <div class="adsgram-label">Advertisement</div>
                 <div class="adsgram-text">AdsGram Integration Space</div>
@@ -1496,11 +1943,8 @@
                 <button class="tab-btn" data-tab="weekly">Weekly</button>
                 <button class="tab-btn" data-tab="lifetime">Lifetime</button>
             </div>
-            <div class="leaderboard-list" id="leaderboardList">
-                <!-- Leaderboard items will be populated from Firebase -->
-            </div>
+            <div class="leaderboard-list" id="leaderboardList"></div>
 
-            <!-- AdsGram Placeholder -->
             <div class="adsgram-placeholder">
                 <div class="adsgram-label">Advertisement</div>
                 <div class="adsgram-text">AdsGram Integration Space</div>
@@ -1551,7 +1995,6 @@
                 </div>
             </div>
 
-            <!-- AdsGram Placeholder -->
             <div class="adsgram-placeholder">
                 <div class="adsgram-label">Advertisement</div>
                 <div class="adsgram-text">AdsGram Integration Space</div>
@@ -1636,7 +2079,6 @@
                 </div>
             </div>
 
-            <!-- AdsGram Placeholder -->
             <div class="adsgram-placeholder">
                 <div class="adsgram-label">Advertisement</div>
                 <div class="adsgram-text">AdsGram Integration Space</div>
@@ -1646,7 +2088,7 @@
         <!-- Bottom Navigation -->
         <div class="bottom-nav">
             <div class="nav-item active" data-page="home">
-                <span class="nav-icon">🪙</span>
+                <span class="nav-icon">🦝</span>
                 <span class="nav-label">Tap</span>
             </div>
             <div class="nav-item" data-page="checkin">
@@ -1684,7 +2126,7 @@
     <!-- Toast -->
     <div class="toast" id="toast">Success!</div>
 
-    <!-- 3. GAME SCRIPT - Waits for Hook to be Ready -->
+    <!-- GAME SCRIPT -->
     <script>
         // ============================================
         // GAME STATE
@@ -1816,7 +2258,7 @@
         }
 
         // ============================================
-        // FIREBASE FUNCTIONS (Using the Hook)
+        // FIREBASE FUNCTIONS
         // ============================================
         async function saveToFirebase() {
             if (!window.firebaseDB || !gameState.telegramUserId) {
@@ -1850,8 +2292,6 @@
                 });
                 
                 updateConnectionStatus('online');
-                
-                // Update leaderboard
                 await updateLeaderboardPresence();
             } catch (error) {
                 console.error('Firebase save failed:', error);
@@ -1879,7 +2319,6 @@
             list.innerHTML = '<div style="text-align: center; padding: 20px; color: #888;">Loading...</div>';
             
             if (!window.firebaseDB) {
-                // Fallback to mock data
                 setTimeout(() => {
                     const mockData = generateLeaderboardData(type);
                     renderLeaderboard(mockData);
@@ -1968,7 +2407,7 @@
         const earnPerTapDisplay = document.getElementById('earnPerTap');
         const profitPerHourDisplay = document.getElementById('profitPerHour');
         const totalTapsDisplay = document.getElementById('totalTaps');
-        const coinContainer = document.getElementById('coinContainer');
+        const characterContainer = document.getElementById('characterContainer');
         const boosterRing = document.getElementById('boosterRing');
         const boosterTimer = document.getElementById('boosterTimer');
         const autoclickerIndicator = document.getElementById('autoclickerIndicator');
@@ -1996,7 +2435,6 @@
             localStorage.setItem('goldhunt_autoclickerPurchased', gameState.autoclickerPurchased);
             localStorage.setItem('goldhunt_lastCheckin', gameState.lastCheckin);
             
-            // Sync to Firebase
             saveToFirebase();
         }
 
@@ -2127,9 +2565,9 @@
         }
 
         // ============================================
-        // TAP HANDLER
+        // CHARACTER TAP HANDLER WITH ENHANCED EFFECTS
         // ============================================
-        coinContainer.addEventListener('click', (e) => {
+        characterContainer.addEventListener('click', (e) => {
             if (!antiCheat.recordTap()) {
                 showToast('⚠️ Slow down!');
                 return;
@@ -2148,38 +2586,103 @@
             saveGame();
             updateUI();
 
-            createFloatingGold(e, earned);
-            createParticles(e);
-            coinContainer.style.transform = 'scale(0.92)';
+            // Trigger character animation
+            characterContainer.classList.add('tapping');
             setTimeout(() => {
-                coinContainer.style.transform = 'scale(1)';
-            }, 100);
+                characterContainer.classList.remove('tapping');
+            }, 300);
+
+            createFloatingGold(e, earned);
+            createEnhancedParticles(e);
+            createCoinBurst(e);
+            
+            // Eye tracking effect
+            updateEyeTracking(e);
         });
 
         function createFloatingGold(e, amount) {
+            const rect = characterContainer.getBoundingClientRect();
             const floating = document.createElement('div');
             floating.className = 'floating-gold';
             floating.textContent = `+${amount}`;
-            floating.style.left = `${e.offsetX}px`;
-            floating.style.top = `${e.offsetY}px`;
-            coinContainer.appendChild(floating);
+            floating.style.left = `${e.clientX - rect.left}px`;
+            floating.style.top = `${e.clientY - rect.top - 50}px`;
+            characterContainer.appendChild(floating);
             setTimeout(() => floating.remove(), 1000);
         }
 
-        function createParticles(e) {
+        function createEnhancedParticles(e) {
+            const rect = characterContainer.getBoundingClientRect();
+            const centerX = e.clientX - rect.left;
+            const centerY = e.clientY - rect.top;
+            
+            // Gold particles
             for (let i = 0; i < 8; i++) {
                 const particle = document.createElement('div');
-                particle.className = 'particle';
-                particle.style.left = `${e.offsetX}px`;
-                particle.style.top = `${e.offsetY}px`;
+                particle.className = 'particle gold';
+                particle.style.left = `${centerX}px`;
+                particle.style.top = `${centerY}px`;
                 const angle = (Math.PI * 2 * i) / 8;
                 const distance = 60 + Math.random() * 60;
                 particle.style.setProperty('--tx', `${Math.cos(angle) * distance}px`);
                 particle.style.setProperty('--ty', `${Math.sin(angle) * distance}px`);
-                coinContainer.appendChild(particle);
+                characterContainer.appendChild(particle);
                 setTimeout(() => particle.remove(), 600);
             }
+            
+            // Sparkle particles
+            for (let i = 0; i < 4; i++) {
+                const sparkle = document.createElement('div');
+                sparkle.className = 'particle sparkle';
+                sparkle.style.left = `${centerX + (Math.random() - 0.5) * 40}px`;
+                sparkle.style.top = `${centerY + (Math.random() - 0.5) * 40}px`;
+                const angle = Math.random() * Math.PI * 2;
+                const distance = 40 + Math.random() * 40;
+                sparkle.style.setProperty('--tx', `${Math.cos(angle) * distance}px`);
+                sparkle.style.setProperty('--ty', `${Math.sin(angle) * distance}px`);
+                characterContainer.appendChild(sparkle);
+                setTimeout(() => sparkle.remove(), 600);
+            }
         }
+
+        function createCoinBurst(e) {
+            const rect = characterContainer.getBoundingClientRect();
+            const burst = document.createElement('div');
+            burst.className = 'coin-burst';
+            burst.textContent = '$';
+            burst.style.left = `${e.clientX - rect.left - 20}px`;
+            burst.style.top = `${e.clientY - rect.top - 20}px`;
+            characterContainer.appendChild(burst);
+            setTimeout(() => burst.remove(), 800);
+        }
+
+        function updateEyeTracking(e) {
+            const rect = characterContainer.getBoundingClientRect();
+            const centerX = rect.width / 2;
+            const centerY = rect.height / 2;
+            const mouseX = e.clientX - rect.left;
+            const mouseY = e.clientY - rect.top;
+            
+            const angle = Math.atan2(mouseY - centerY, mouseX - centerX);
+            const distance = Math.min(5, Math.hypot(mouseX - centerX, mouseY - centerY) / 10);
+            
+            const pupils = document.querySelectorAll('.pupil');
+            pupils.forEach(pupil => {
+                const x = Math.cos(angle) * distance;
+                const y = Math.sin(angle) * distance;
+                pupil.style.transform = `translate(calc(-50% + ${x}px), calc(-50% + ${y}px))`;
+            });
+        }
+
+        // Reset eye position when not tapping
+        document.addEventListener('mousemove', (e) => {
+            if (!characterContainer.matches(':active')) {
+                const pupils = document.querySelectorAll('.pupil');
+                pupils.forEach(pupil => {
+                    pupil.style.transform = 'translate(-50%, -50%)';
+                });
+            }
+        });
 
         // ============================================
         // ENERGY RECHARGE
@@ -2218,10 +2721,19 @@
                     saveGame();
                     updateUI();
                     
-                    coinContainer.style.transform = 'scale(0.95)';
+                    // Simulate tap animation
+                    characterContainer.classList.add('tapping');
                     setTimeout(() => {
-                        coinContainer.style.transform = 'scale(1)';
-                    }, 50);
+                        characterContainer.classList.remove('tapping');
+                    }, 100);
+                    
+                    // Create particles at center
+                    const rect = characterContainer.getBoundingClientRect();
+                    const fakeEvent = {
+                        clientX: rect.left + rect.width / 2,
+                        clientY: rect.top + rect.height / 2
+                    };
+                    createEnhancedParticles(fakeEvent);
                 } else if (new Date() >= endTime) {
                     gameState.autoclickerActive = false;
                     saveGame();
@@ -2452,32 +2964,23 @@
         });
 
         // ============================================
-        // GAME INITIALIZATION - Waits for Hook
+        // GAME INITIALIZATION
         // ============================================
         function initGame() {
             console.log("🎮 Initializing game...");
             
-            // Get data from hook (window object)
             gameState.telegramUserId = window.telegramId;
             gameState.username = window.username;
             
-            console.log("Telegram ID from hook:", gameState.telegramUserId);
-            console.log("Username from hook:", gameState.username);
-            
-            // Generate referral code if needed
             if (!gameState.referralCode && gameState.telegramUserId) {
                 gameState.referralCode = 'GH' + gameState.telegramUserId.toString().slice(-6);
                 localStorage.setItem('goldhunt_referralCode', gameState.referralCode);
             }
             
-            // Initialize TON Connect
             initTonConnect();
-            
-            // Update UI
             updateUI();
             loadLeaderboard('daily');
             
-            // Check autoclicker status
             if (gameState.autoclickerEndTime) {
                 const endTime = new Date(gameState.autoclickerEndTime);
                 if (new Date() >= endTime) {
@@ -2486,7 +2989,6 @@
                 }
             }
             
-            // Periodic Firebase sync
             setInterval(() => {
                 if (navigator.onLine && window.firebaseDB) {
                     saveToFirebase();
@@ -2496,29 +2998,14 @@
             window.gameInitialized = true;
         }
 
-        // Listen for hook ready event
         window.addEventListener('firebaseHookReady', initGame);
         
-        // Fallback initialization
         setTimeout(() => {
             if (!window.gameInitialized) {
                 console.log("⏰ Fallback initialization");
                 initGame();
             }
         }, 3000);
-
-        // Debug info
-        setTimeout(() => {
-            console.log("=== 🔍 HOOK CONNECTION TEST ===");
-            console.log("1. Telegram object:", !!window.Telegram);
-            console.log("2. Telegram.WebApp:", !!window.Telegram?.WebApp);
-            console.log("3. Telegram ID:", window.telegramId);
-            console.log("4. Username:", window.username);
-            console.log("5. Firebase DB:", !!window.firebaseDB);
-            console.log("6. Game Initialized:", window.gameInitialized);
-            console.log("===============================");
-        }, 2000);
     </script>
 </body>
 </html>
-
