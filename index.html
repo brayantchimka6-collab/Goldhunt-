@@ -1,0 +1,1329 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>GoldHunt - Tap to Earn</title>
+    <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+    
+    <!-- TELEGRAM WEBAPP SCRIPT -->
+    <script src="https://telegram.org/js/telegram-web-app.js"></script>
+    
+    <!-- TON Connect UI - OFFICIAL SDK -->
+    <script src="https://unpkg.com/@tonconnect/ui@latest/dist/tonconnect-ui.min.js"></script>
+    
+    <!-- ADSGRAM SDK -->
+    <script src="https://sad.adsgram.ai/js/sad.min.js"></script>
+
+    <!-- FIREBASE MODULE -->
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/12.9.0/firebase-app.js";
+        import { getAnalytics } from "https://www.gstatic.com/firebasejs/12.9.0/firebase-analytics.js";
+        import { 
+            getFirestore, 
+            doc, 
+            setDoc, 
+            getDoc, 
+            updateDoc, 
+            collection,
+            query,
+            orderBy,
+            limit,
+            getDocs,
+            serverTimestamp,
+            increment,
+            arrayUnion
+        } from "https://www.gstatic.com/firebasejs/12.9.0/firebase-firestore.js";
+        
+        const firebaseConfig = {
+            apiKey: "AIzaSyCLsEBXOrhtQaTg9LoXnVmGj3UIYrvhoeY",
+            authDomain: "goldhunt-4e6f0.firebaseapp.com",
+            projectId: "goldhunt-4e6f0",
+            storageBucket: "goldhunt-4e6f0.firebasestorage.app",
+            messagingSenderId: "278254214273",
+            appId: "1:278254214273:web:dc48dc2ce9c0c06feb4180",
+            measurementId: "G-L0XTTGL59L"
+        };
+
+        const app = initializeApp(firebaseConfig);
+        const analytics = getAnalytics(app);
+        const db = getFirestore(app);
+        
+        function initializeTelegramHook() {
+            if (!window.Telegram || !window.Telegram.WebApp) {
+                setTimeout(initializeTelegramHook, 500);
+                return;
+            }
+            
+            const tg = window.Telegram.WebApp;
+            tg.ready();
+            tg.expand();
+            
+            const telegramUser = tg.initDataUnsafe?.user;
+            const telegramId = telegramUser?.id;
+            const playerName = telegramUser?.first_name || "Guest";
+            const username = telegramUser?.username || `user_${telegramId || Date.now()}`;
+            const startParam = tg.initDataUnsafe?.start_param;
+            
+            // Expose to global scope
+            window.firestoreDB = db;
+            window.firestoreDoc = doc;
+            window.firestoreSetDoc = setDoc;
+            window.firestoreGetDoc = getDoc;
+            window.firestoreUpdateDoc = updateDoc;
+            window.firestoreCollection = collection;
+            window.firestoreQuery = query;
+            window.firestoreOrderBy = orderBy;
+            window.firestoreLimit = limit;
+            window.firestoreGetDocs = getDocs;
+            window.serverTimestamp = serverTimestamp;
+            window.firestoreIncrement = increment;
+            window.firestoreArrayUnion = arrayUnion;
+            window.telegramId = telegramId;
+            window.telegramUser = telegramUser;
+            window.playerName = playerName;
+            window.username = username;
+            window.tg = tg;
+            window.startParam = startParam;
+            
+            if (telegramId) {
+                initializeFirestoreUser(telegramId, username, playerName, startParam);
+            } else {
+                window.telegramId = 'test_' + Date.now();
+                window.username = 'TestUser';
+                window.dispatchEvent(new Event('firebaseHookReady'));
+            }
+        }
+        
+        async function initializeFirestoreUser(telegramId, username, playerName, referralCode) {
+            try {
+                const userRef = doc(db, 'users', telegramId.toString());
+                const userSnap = await getDoc(userRef);
+                
+                if (!userSnap.exists()) {
+                    let referredBy = null;
+                    let bonusGold = 0;
+                    
+                    if (referralCode && referralCode.startsWith('GH')) {
+                        const referrerId = await validateReferralCode(referralCode);
+                        if (referrerId) {
+                            referredBy = referrerId;
+                            bonusGold = 20000;
+                            await updateReferrerStats(referrerId, telegramId);
+                        }
+                    }
+                    
+                    await setDoc(userRef, {
+                        telegramId: telegramId,
+                        username: username,
+                        playerName: playerName,
+                        gold: bonusGold,
+                        totalTaps: 0,
+                        rank: 'Wood',
+                        referredBy: referredBy,
+                        referrals: [],
+                        referralCount: 0,
+                        referralGoldEarned: 0,
+                        walletAddress: null,
+                        createdAt: serverTimestamp(),
+                        lastUpdated: serverTimestamp()
+                    });
+                    
+                    if (bonusGold > 0) window.referralBonus = bonusGold;
+                } else {
+                    const userData = userSnap.data();
+                    window.existingReferralCount = userData.referralCount || 0;
+                    window.existingReferralGold = userData.referralGoldEarned || 0;
+                }
+                
+                window.dispatchEvent(new Event('firebaseHookReady'));
+            } catch (error) {
+                console.error("Firestore user init error:", error);
+                window.dispatchEvent(new Event('firebaseHookReady'));
+            }
+        }
+        
+        async function validateReferralCode(code) {
+            try {
+                const usersRef = collection(db, 'users');
+                const q = query(usersRef, orderBy('createdAt', 'desc'), limit(100));
+                const querySnapshot = await getDocs(q);
+                
+                for (const docSnap of querySnapshot.docs) {
+                    const userData = docSnap.data();
+                    const expectedCode = 'GH' + userData.telegramId.toString().slice(-6);
+                    if (expectedCode === code) return userData.telegramId;
+                }
+                return null;
+            } catch (error) {
+                console.error("Error validating referral code:", error);
+                return null;
+            }
+        }
+        
+        async function updateReferrerStats(referrerId, newUserId) {
+            try {
+                const referrerRef = doc(db, 'users', referrerId.toString());
+                await updateDoc(referrerRef, {
+                    referrals: arrayUnion(newUserId),
+                    referralCount: increment(1),
+                    referralGoldEarned: increment(20000),
+                    gold: increment(20000),
+                    lastUpdated: serverTimestamp()
+                });
+            } catch (error) {
+                console.error("Error updating referrer stats:", error);
+            }
+        }
+        
+        initializeTelegramHook();
+    </script>
+    
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+            -webkit-tap-highlight-color: transparent;
+            user-select: none;
+            touch-action: manipulation;
+        }
+
+        body {
+            font-family: 'Poppins', sans-serif;
+            background: linear-gradient(135deg, #1a0a2e 0%, #16213e 50%, #0f3460 100%);
+            min-height: 100vh;
+            color: #fff;
+            overflow-x: hidden;
+        }
+
+        .app-container {
+            max-width: 480px;
+            margin: 0 auto;
+            min-height: 100vh;
+            position: relative;
+            padding-bottom: 80px;
+        }
+
+        .header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 15px 20px;
+            background: rgba(0, 0, 0, 0.3);
+            backdrop-filter: blur(10px);
+        }
+
+        .logo {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .logo-icon {
+            width: 40px;
+            height: 40px;
+            background: linear-gradient(135deg, #ffd700, #ffaa00);
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 24px;
+        }
+
+        .logo-text {
+            font-size: 20px;
+            font-weight: 700;
+            background: linear-gradient(135deg, #ffd700, #ffaa00);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+
+        /* TON Connect Button Styling - Hamster Style */
+        #ton-connect-button {
+            transform: scale(0.85);
+            transform-origin: right center;
+        }
+
+        /* Custom Wallet Button for fallback */
+        .wallet-connect-btn {
+            display: none;
+            padding: 10px 20px;
+            background: linear-gradient(135deg, #31d158, #28a745);
+            border: none;
+            border-radius: 25px;
+            color: #fff;
+            font-weight: 600;
+            font-size: 13px;
+            cursor: pointer;
+            transition: all 0.3s ease;
+        }
+        .wallet-connect-btn:hover {
+            transform: scale(1.05);
+            box-shadow: 0 5px 15px rgba(49, 209, 88, 0.4);
+        }
+
+        .stats-bar {
+            display: flex;
+            justify-content: space-around;
+            padding: 15px;
+            background: rgba(255, 255, 255, 0.05);
+            margin: 10px;
+            border-radius: 15px;
+        }
+
+        .stat-item { text-align: center; }
+        .stat-label { font-size: 11px; color: #888; text-transform: uppercase; }
+        .stat-value { font-size: 16px; font-weight: 700; color: #ffd700; }
+
+        .rank-badge {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+            padding: 8px 15px;
+            background: rgba(255, 215, 0, 0.1);
+            border-radius: 20px;
+            margin: 10px auto;
+            max-width: 280px;
+            border: 1px solid rgba(255, 215, 0, 0.3);
+        }
+
+        .rank-icon { font-size: 20px; }
+        .rank-name { font-weight: 700; font-size: 14px; color: #ffd700; }
+        .rank-boost { font-size: 11px; color: #888; }
+
+        .game-area {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            padding: 20px;
+            position: relative;
+        }
+
+        .gold-display { text-align: center; margin-bottom: 15px; }
+        .gold-amount {
+            font-size: 42px;
+            font-weight: 800;
+            background: linear-gradient(135deg, #ffd700, #ffaa00);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+            text-shadow: 0 0 30px rgba(255, 215, 0, 0.3);
+        }
+        .gold-label { font-size: 14px; color: #888; }
+
+        .progress-section { width: 100%; max-width: 300px; margin-bottom: 20px; }
+        .progress-info { display: flex; justify-content: space-between; margin-bottom: 5px; font-size: 12px; }
+        .progress-bar { height: 8px; background: rgba(255, 255, 255, 0.1); border-radius: 4px; overflow: hidden; }
+        .progress-fill { height: 100%; background: linear-gradient(90deg, #ffd700, #ffaa00); border-radius: 4px; transition: width 0.3s ease; }
+
+        .character-container {
+            position: relative;
+            width: 240px;
+            height: 240px;
+            cursor: pointer;
+            transition: transform 0.1s cubic-bezier(0.68, -0.55, 0.265, 1.55);
+            touch-action: none;
+        }
+        .character-container:active { transform: scale(0.92) translateY(10px); }
+        .character-container.tapping { animation: character-bounce 0.3s ease-out; }
+
+        @keyframes character-bounce {
+            0% { transform: scale(1) translateY(0); }
+            40% { transform: scale(0.85) translateY(20px); }
+            60% { transform: scale(1.05) translateY(-10px); }
+            100% { transform: scale(1) translateY(0); }
+        }
+
+        .character-shadow {
+            position: absolute;
+            bottom: 10px;
+            left: 50%;
+            transform: translateX(-50%);
+            width: 140px;
+            height: 30px;
+            background: radial-gradient(ellipse, rgba(0,0,0,0.4) 0%, transparent 70%);
+            border-radius: 50%;
+        }
+
+        .thief-character {
+            width: 100%;
+            height: 100%;
+            position: relative;
+            animation: idle-float 3s ease-in-out infinite;
+        }
+
+        @keyframes idle-float {
+            0%, 100% { transform: translateY(0px); }
+            50% { transform: translateY(-8px); }
+        }
+
+        .thief-body {
+            position: absolute;
+            bottom: 30px;
+            left: 50%;
+            transform: translateX(-50%);
+            width: 160px;
+            height: 140px;
+            background: linear-gradient(135deg, #8B4513 0%, #A0522D 50%, #654321 100%);
+            border-radius: 50% 50% 45% 45%;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.4);
+            border: 3px solid #5D3A1A;
+        }
+
+        .thief-head {
+            position: absolute;
+            top: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            width: 130px;
+            height: 110px;
+            background: linear-gradient(135deg, #8B4513 0%, #A0522D 50%, #654321 100%);
+            border-radius: 50%;
+            border: 3px solid #5D3A1A;
+            z-index: 10;
+        }
+
+        .ear {
+            position: absolute;
+            width: 35px;
+            height: 35px;
+            background: linear-gradient(135deg, #8B4513, #654321);
+            border-radius: 50% 50% 0 0;
+            border: 2px solid #5D3A1A;
+            top: -5px;
+        }
+        .ear.left { left: 15px; transform: rotate(-20deg); }
+        .ear.right { right: 15px; transform: rotate(20deg); }
+
+        .face {
+            position: absolute;
+            top: 35px;
+            left: 50%;
+            transform: translateX(-50%);
+            width: 90px;
+            height: 60px;
+        }
+
+        .eye {
+            position: absolute;
+            width: 28px;
+            height: 32px;
+            background: #fff;
+            border-radius: 50%;
+            top: 0;
+            border: 2px solid #333;
+            overflow: hidden;
+        }
+        .eye.left { left: 8px; }
+        .eye.right { right: 8px; }
+
+        .pupil {
+            position: absolute;
+            width: 14px;
+            height: 18px;
+            background: linear-gradient(135deg, #4A3000, #2A1A00);
+            border-radius: 50%;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+        }
+
+        .eye-mask {
+            position: absolute;
+            top: 28px;
+            left: 50%;
+            transform: translateX(-50%);
+            width: 80px;
+            height: 25px;
+            background: linear-gradient(135deg, #2C2C2C, #1A1A1A);
+            border-radius: 0 0 40% 40%;
+            z-index: 5;
+        }
+
+        .nose {
+            position: absolute;
+            top: 42px;
+            left: 50%;
+            transform: translateX(-50%);
+            width: 12px;
+            height: 10px;
+            background: linear-gradient(135deg, #FF6B6B, #EE5A24);
+            border-radius: 50%;
+            z-index: 6;
+        }
+
+        .mouth {
+            position: absolute;
+            bottom: 5px;
+            left: 50%;
+            transform: translateX(-50%);
+            width: 30px;
+            height: 15px;
+            border-bottom: 3px solid #333;
+            border-radius: 0 0 50% 50%;
+        }
+
+        .thief-hat {
+            position: absolute;
+            top: -15px;
+            left: 50%;
+            transform: translateX(-50%);
+            width: 100px;
+            height: 50px;
+            background: linear-gradient(135deg, #2C2C2C, #1A1A1A);
+            border-radius: 50% 50% 0 0;
+            z-index: 15;
+        }
+
+        .arm {
+            position: absolute;
+            width: 40px;
+            height: 70px;
+            background: linear-gradient(135deg, #8B4513, #654321);
+            border-radius: 20px;
+            top: 80px;
+            border: 2px solid #5D3A1A;
+            z-index: 5;
+        }
+        .arm.left { left: 20px; transform: rotate(20deg); }
+        .arm.right { right: 20px; transform: rotate(-20deg); }
+
+        .gold-bag {
+            position: absolute;
+            bottom: 20px;
+            right: 10px;
+            width: 60px;
+            height: 70px;
+            background: linear-gradient(135deg, #DAA520, #B8860B);
+            border-radius: 10px 10px 30% 30%;
+            border: 3px solid #8B6914;
+            z-index: 8;
+            transform: rotate(15deg);
+            animation: bag-sway 2s ease-in-out infinite;
+        }
+
+        @keyframes bag-sway {
+            0%, 100% { transform: rotate(15deg) translateY(0); }
+            50% { transform: rotate(10deg) translateY(-5px); }
+        }
+
+        .bag-dollar {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            font-size: 24px;
+            font-weight: 800;
+            color: #FFD700;
+        }
+
+        .booster-ring {
+            position: absolute;
+            width: 280px;
+            height: 280px;
+            border: 5px solid transparent;
+            border-radius: 50%;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            pointer-events: none;
+        }
+        .booster-ring.active {
+            border-color: #ff00ff;
+            box-shadow: 0 0 40px #ff00ff, inset 0 0 40px #ff00ff;
+            animation: pulse-ring 0.5s ease-in-out infinite;
+        }
+        @keyframes pulse-ring {
+            0%, 100% { transform: translate(-50%, -50%) scale(1); }
+            50% { transform: translate(-50%, -50%) scale(1.08); }
+        }
+
+        .booster-timer {
+            position: absolute;
+            top: -40px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: linear-gradient(135deg, #ff00ff, #ff0066);
+            padding: 8px 20px;
+            border-radius: 20px;
+            font-weight: 700;
+            font-size: 16px;
+            display: none;
+            z-index: 20;
+        }
+        .booster-timer.active { display: block; }
+
+        .autoclicker-indicator {
+            position: absolute;
+            bottom: -50px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: linear-gradient(135deg, #00ff88, #00cc6a);
+            padding: 8px 20px;
+            border-radius: 20px;
+            font-weight: 700;
+            font-size: 14px;
+            display: none;
+            z-index: 20;
+        }
+        .autoclicker-indicator.active { display: block; }
+
+        .floating-gold {
+            position: absolute;
+            font-weight: 800;
+            font-size: 24px;
+            color: #ffd700;
+            pointer-events: none;
+            animation: float-up 1s ease-out forwards;
+            z-index: 100;
+        }
+        @keyframes float-up {
+            0% { opacity: 1; transform: translateY(0) scale(1); }
+            100% { opacity: 0; transform: translateY(-120px) scale(1.3); }
+        }
+
+        .energy-section { width: 100%; max-width: 300px; margin-top: 60px; }
+        .energy-header { display: flex; justify-content: space-between; margin-bottom: 8px; font-size: 14px; }
+        .energy-bar { height: 14px; background: rgba(255, 255, 255, 0.1); border-radius: 7px; overflow: hidden; }
+        .energy-fill { height: 100%; background: linear-gradient(90deg, #ff416c, #ff4b2b); border-radius: 7px; transition: width 0.3s ease; }
+
+        /* REFERRAL SECTION */
+        .referral-section {
+            background: rgba(255, 255, 255, 0.05);
+            border-radius: 15px;
+            padding: 20px;
+            margin: 15px 10px;
+            text-align: center;
+            border: 1px solid rgba(255, 215, 0, 0.2);
+        }
+        .referral-title { font-size: 16px; color: #ffd700; margin-bottom: 15px; font-weight: 700; }
+        .referral-link-box {
+            background: rgba(0, 0, 0, 0.3);
+            border: 2px dashed rgba(255, 215, 0, 0.5);
+            border-radius: 12px;
+            padding: 15px;
+            margin-bottom: 15px;
+            word-break: break-all;
+        }
+        .referral-link { font-family: monospace; font-size: 13px; color: #ffd700; line-height: 1.5; }
+        .copy-link-btn {
+            width: 100%;
+            padding: 12px;
+            background: linear-gradient(135deg, #ffd700, #ffaa00);
+            border: none;
+            border-radius: 10px;
+            color: #1a0a2e;
+            font-weight: 700;
+            font-size: 14px;
+            cursor: pointer;
+            transition: all 0.3s ease;
+        }
+        .copy-link-btn:hover { transform: scale(1.02); box-shadow: 0 5px 20px rgba(255, 215, 0, 0.4); }
+        .referral-info { font-size: 13px; color: #aaa; margin-top: 15px; line-height: 1.6; }
+        .referral-info strong { color: #ffd700; }
+        .referral-stats { display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; margin-top: 15px; }
+        .referral-stat { background: rgba(0, 0, 0, 0.2); padding: 12px; border-radius: 10px; }
+        .referral-stat-value { font-size: 22px; font-weight: 700; color: #ffd700; }
+        .referral-stat-label { font-size: 11px; color: #888; }
+
+        /* Bottom Navigation */
+        .bottom-nav {
+            position: fixed;
+            bottom: 0;
+            left: 50%;
+            transform: translateX(-50%);
+            width: 100%;
+            max-width: 480px;
+            background: rgba(0, 0, 0, 0.95);
+            backdrop-filter: blur(10px);
+            display: flex;
+            justify-content: space-around;
+            padding: 10px 0;
+            border-top: 1px solid rgba(255, 255, 255, 0.1);
+            z-index: 100;
+        }
+        .nav-item { display: flex; flex-direction: column; align-items: center; gap: 3px; cursor: pointer; padding: 5px 12px; border-radius: 10px; transition: all 0.3s ease; }
+        .nav-item:hover { background: rgba(255, 255, 255, 0.1); }
+        .nav-item.active { color: #ffd700; }
+        .nav-icon { font-size: 22px; }
+        .nav-label { font-size: 9px; }
+
+        .page { display: none; padding: 15px; }
+        .page.active { display: block; }
+
+        /* Modal */
+        .modal-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(0, 0, 0, 0.9);
+            display: none;
+            align-items: center;
+            justify-content: center;
+            z-index: 1000;
+            padding: 20px;
+        }
+        .modal-overlay.active { display: flex; }
+        .modal {
+            background: linear-gradient(135deg, #1a0a2e, #16213e);
+            border-radius: 20px;
+            padding: 30px;
+            max-width: 350px;
+            width: 100%;
+            text-align: center;
+            border: 1px solid rgba(255, 215, 0, 0.2);
+        }
+        .modal-icon { font-size: 60px; margin-bottom: 15px; }
+        .modal-title { font-size: 24px; font-weight: 700; margin-bottom: 10px; }
+        .modal-desc { font-size: 14px; color: #888; margin-bottom: 20px; white-space: pre-line; }
+        .modal-btn { padding: 12px 30px; border: none; border-radius: 25px; font-weight: 600; cursor: pointer; transition: all 0.3s ease; }
+        .modal-btn.confirm { background: linear-gradient(135deg, #ffd700, #ffaa00); color: #1a0a2e; }
+
+        .toast {
+            position: fixed;
+            top: 100px;
+            left: 50%;
+            transform: translateX(-50%) translateY(-100px);
+            background: linear-gradient(135deg, #11998e, #38ef7d);
+            padding: 15px 30px;
+            border-radius: 25px;
+            font-weight: 600;
+            opacity: 0;
+            transition: all 0.3s ease;
+            z-index: 1001;
+        }
+        .toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+
+        @media (max-width: 480px) {
+            .character-container { width: 200px; height: 200px; }
+            .gold-amount { font-size: 32px; }
+        }
+    </style>
+</head>
+<body>
+    <div class="app-container">
+        <!-- Header -->
+        <div class="header">
+            <div class="logo">
+                <div class="logo-icon">🦝</div>
+                <div class="logo-text">GoldHunt</div>
+            </div>
+            <!-- TON CONNECT BUTTON CONTAINER -->
+            <div id="ton-connect-button"></div>
+            <!-- Fallback Button -->
+            <button class="wallet-connect-btn" id="walletFallbackBtn" onclick="manualWalletConnect()">
+                Connect Wallet
+            </button>
+        </div>
+
+        <!-- Stats Bar -->
+        <div class="stats-bar">
+            <div class="stat-item">
+                <div class="stat-label">Earn per Tap</div>
+                <div class="stat-value" id="earnPerTap">+1</div>
+            </div>
+            <div class="stat-item">
+                <div class="stat-label">Profit/Hour</div>
+                <div class="stat-value" id="profitPerHour">0</div>
+            </div>
+            <div class="stat-item">
+                <div class="stat-label">Total Taps</div>
+                <div class="stat-value" id="totalTaps">0</div>
+            </div>
+        </div>
+
+        <!-- Rank Badge -->
+        <div class="rank-badge" id="rankBadge">
+            <span class="rank-icon">🪵</span>
+            <span class="rank-name">Wood</span>
+            <span class="rank-boost">(+1/tap)</span>
+        </div>
+
+        <!-- Home Page -->
+        <div class="page active" id="homePage">
+            <div class="game-area">
+                <div class="gold-display">
+                    <div class="gold-amount" id="goldAmount">0</div>
+                    <div class="gold-label">GOLD</div>
+                </div>
+
+                <div class="progress-section">
+                    <div class="progress-info">
+                        <span>Progress to Next Rank</span>
+                        <span id="rankProgressText">0/50K</span>
+                    </div>
+                    <div class="progress-bar">
+                        <div class="progress-fill" id="rankProgressFill" style="width: 0%"></div>
+                    </div>
+                </div>
+
+                <!-- Character -->
+                <div class="character-container" id="characterContainer">
+                    <div class="booster-ring" id="boosterRing"></div>
+                    <div class="booster-timer" id="boosterTimer">50x: 40s</div>
+                    <div class="autoclicker-indicator" id="autoclickerIndicator">🤖 Auto: 7h</div>
+                    
+                    <div class="thief-character">
+                        <div class="character-shadow"></div>
+                        <div class="gold-bag">
+                            <div class="bag-dollar">$</div>
+                        </div>
+                        <div class="arm left"></div>
+                        <div class="arm right"></div>
+                        <div class="thief-body"></div>
+                        <div class="thief-head">
+                            <div class="ear left"><div class="ear-inner"></div></div>
+                            <div class="ear right"><div class="ear-inner"></div></div>
+                            <div class="thief-hat"></div>
+                            <div class="face">
+                                <div class="eye left"><div class="pupil"></div></div>
+                                <div class="eye right"><div class="pupil"></div></div>
+                                <div class="eye-mask"></div>
+                                <div class="nose"></div>
+                                <div class="mouth"></div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="energy-section">
+                    <div class="energy-header">
+                        <span>⚡ Energy</span>
+                        <span id="energyText">1000/1000</span>
+                    </div>
+                    <div class="energy-bar">
+                        <div class="energy-fill" id="energyFill" style="width: 100%"></div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- REFERRAL SECTION -->
+            <div class="referral-section">
+                <div class="referral-title">🎁 Invite Friends & Earn 20K GOLD</div>
+                
+                <div class="referral-link-box">
+                    <div class="referral-link" id="referralLink">Loading...</div>
+                </div>
+                
+                <button class="copy-link-btn" id="copyLinkBtn" onclick="copyReferralLink()">
+                    📋 Copy Invite Link
+                </button>
+                
+                <div class="referral-info">
+                    <strong>You get:</strong> 20,000 GOLD per friend<br>
+                    <strong>They get:</strong> 20,000 GOLD starter bonus
+                </div>
+                
+                <div class="referral-stats">
+                    <div class="referral-stat">
+                        <div class="referral-stat-value" id="referralCount">0</div>
+                        <div class="referral-stat-label">Friends Invited</div>
+                    </div>
+                    <div class="referral-stat">
+                        <div class="referral-stat-value" id="referralEarnings">0</div>
+                        <div class="referral-stat-label">Gold Earned</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Other Pages -->
+        <div class="page" id="checkinPage">
+            <div style="text-align: center; padding: 40px; color: #888;">
+                <div style="font-size: 24px; font-weight: 700; color: #ffd700; margin-bottom: 20px;">📅 Daily Rewards</div>
+                <div>Calendar coming soon...</div>
+            </div>
+        </div>
+
+        <div class="page" id="tasksPage">
+            <div style="text-align: center; padding: 40px; color: #888;">
+                <div style="font-size: 24px; font-weight: 700; color: #ffd700; margin-bottom: 20px;">📋 Tasks</div>
+                <div>Tasks coming soon...</div>
+            </div>
+        </div>
+
+        <div class="page" id="leaderboardPage">
+            <div style="text-align: center; padding: 40px; color: #888;">
+                <div style="font-size: 24px; font-weight: 700; color: #ffd700; margin-bottom: 20px;">🏆 Leaderboard</div>
+                <div>Leaderboard coming soon...</div>
+            </div>
+        </div>
+
+        <div class="page" id="boostPage">
+            <div style="text-align: center; padding: 40px; color: #888;">
+                <div style="font-size: 24px; font-weight: 700; color: #ffd700; margin-bottom: 20px;">🚀 Boosts</div>
+                <div>Boosts coming soon...</div>
+            </div>
+        </div>
+
+        <!-- Bottom Navigation -->
+        <div class="bottom-nav">
+            <div class="nav-item active" data-page="home" onclick="navigateTo('home')">
+                <span class="nav-icon">🦝</span>
+                <span class="nav-label">Tap</span>
+            </div>
+            <div class="nav-item" data-page="checkin" onclick="navigateTo('checkin')">
+                <span class="nav-icon">📅</span>
+                <span class="nav-label">Check-in</span>
+            </div>
+            <div class="nav-item" data-page="tasks" onclick="navigateTo('tasks')">
+                <span class="nav-icon">📋</span>
+                <span class="nav-label">Tasks</span>
+            </div>
+            <div class="nav-item" data-page="leaderboard" onclick="navigateTo('leaderboard')">
+                <span class="nav-icon">🏆</span>
+                <span class="nav-label">Leaders</span>
+            </div>
+            <div class="nav-item" data-page="boost" onclick="navigateTo('boost')">
+                <span class="nav-icon">🚀</span>
+                <span class="nav-label">Boost</span>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal -->
+    <div class="modal-overlay" id="modal">
+        <div class="modal">
+            <div class="modal-icon" id="modalIcon">🎉</div>
+            <div class="modal-title" id="modalTitle">Success!</div>
+            <div class="modal-desc" id="modalDesc">You got a reward!</div>
+            <button class="modal-btn confirm" onclick="closeModal()">OK</button>
+        </div>
+    </div>
+
+    <!-- Toast -->
+    <div class="toast" id="toast">Success!</div>
+
+    <!-- GAME SCRIPT -->
+    <script>
+        // ============================================
+        // GAME STATE
+        // ============================================
+        const gameState = {
+            gold: parseInt(localStorage.getItem('goldhunt_gold')) || 0,
+            energy: parseInt(localStorage.getItem('goldhunt_energy')) || 1000,
+            maxEnergy: parseInt(localStorage.getItem('goldhunt_maxEnergy')) || 1000,
+            earnPerTap: parseInt(localStorage.getItem('goldhunt_earnPerTap')) || 1,
+            totalTaps: parseInt(localStorage.getItem('goldhunt_totalTaps')) || 0,
+            referralCode: localStorage.getItem('goldhunt_referralCode') || null,
+            referralCount: parseInt(localStorage.getItem('goldhunt_referralCount')) || 0,
+            referralGoldEarned: parseInt(localStorage.getItem('goldhunt_referralGoldEarned')) || 0,
+            telegramUserId: null,
+            username: null,
+            walletAddress: localStorage.getItem('goldhunt_walletAddress') || null,
+            walletConnected: localStorage.getItem('goldhunt_walletConnected') === 'true'
+        };
+
+        // ============================================
+        // RANK SYSTEM
+        // ============================================
+        const rankSystem = [
+            { name: 'Wood', min: 0, max: 50000, icon: '🪵', boost: 1 },
+            { name: 'Gold Hunter', min: 50000, max: 200000, icon: '🥉', boost: 2 },
+            { name: 'Gold Thief', min: 200000, max: 1000000, icon: '🥈', boost: 5 },
+            { name: 'Master', min: 1000000, max: 5000000, icon: '🥇', boost: 10 },
+            { name: 'Grand Master', min: 5000000, max: 10000000, icon: '💎', boost: 15 },
+            { name: 'Elite', min: 10000000, max: Infinity, icon: '👑', boost: 20 }
+        ];
+
+        // ============================================
+        // TON CONNECT - HAMSTER KOMBAT STYLE
+        // ============================================
+        let tonConnectUI = null;
+
+        // HAMSTER STYLE: Initialize TON Connect with proper Telegram handling
+        function initTonConnect() {
+            try {
+                console.log('🔌 Initializing TON Connect (Hamster Style)...');
+
+                // HAMSTER STYLE: Check if we're in Telegram WebApp
+                const isTelegram = window.Telegram && window.Telegram.WebApp;
+                const tg = isTelegram ? window.Telegram.WebApp : null;
+
+                // HAMSTER STYLE: Initialize TON Connect UI
+                tonConnectUI = new TON_CONNECT_UI.TonConnectUI({
+                    manifestUrl: 'https://goldhuntpro.vercel.app/tonconnect-manifest.json',
+                    buttonRootId: 'ton-connect-button'
+                });
+
+                // HAMSTER STYLE: Configure for Telegram Mini App
+                // This is the exact configuration Hamster Kombat uses
+                if (isTelegram) {
+                    tonConnectUI.uiOptions = {
+                        twaReturnUrl: 'https://t.me/Goldhunt101bot?startapp=main',
+                        returnStrategy: 'back'
+                    };
+                }
+
+                // HAMSTER STYLE: Listen for wallet connection
+                tonConnectUI.onStatusChange(async (wallet) => {
+                    if (wallet) {
+                        console.log('✅ Wallet connected:', wallet.account.address);
+                        await handleWalletConnected(wallet.account.address, wallet.connectItems?.tonProof);
+                    } else {
+                        console.log('🔌 Wallet disconnected');
+                        handleWalletDisconnected();
+                    }
+                });
+
+                // HAMSTER STYLE: Restore existing connection
+                restoreWalletConnection();
+
+                console.log('✅ TON Connect initialized successfully');
+            } catch (error) {
+                console.error('❌ TON Connect initialization failed:', error);
+                showFallbackWalletButton();
+            }
+        }
+
+        // HAMSTER STYLE: Restore connection on page load
+        async function restoreWalletConnection() {
+            try {
+                if (!tonConnectUI) return;
+                
+                // Check if we have a stored wallet
+                const wallet = await tonConnectUI.getWallet();
+                if (wallet && wallet.account) {
+                    console.log('🔄 Restoring wallet connection:', wallet.account.address);
+                    await handleWalletConnected(wallet.account.address, null, true);
+                }
+            } catch (error) {
+                console.log('No previous wallet connection found');
+            }
+        }
+
+        // HAMSTER STYLE: Handle wallet connection
+        async function handleWalletConnected(address, proof, isRestore = false) {
+            try {
+                gameState.walletAddress = address;
+                gameState.walletConnected = true;
+                
+                // Save to localStorage
+                localStorage.setItem('goldhunt_walletAddress', address);
+                localStorage.setItem('goldhunt_walletConnected', 'true');
+
+                // Show success message
+                if (!isRestore) {
+                    showToast('✅ Wallet Connected!');
+                }
+
+                // Save to Firebase if user is logged in
+                if (window.firestoreDB && gameState.telegramUserId) {
+                    await saveWalletToFirestore(address, proof);
+                }
+
+                console.log('💼 Wallet data saved:', address);
+            } catch (error) {
+                console.error('Error handling wallet connection:', error);
+            }
+        }
+
+        // HAMSTER STYLE: Handle wallet disconnection
+        function handleWalletDisconnected() {
+            gameState.walletAddress = null;
+            gameState.walletConnected = false;
+            
+            localStorage.removeItem('goldhunt_walletAddress');
+            localStorage.removeItem('goldhunt_walletConnected');
+            
+            showToast('🔌 Wallet Disconnected');
+        }
+
+        // HAMSTER STYLE: Save wallet to Firestore with optional proof
+        async function saveWalletToFirestore(address, proof) {
+            try {
+                const userRef = window.firestoreDoc(window.firestoreDB, 'users', gameState.telegramUserId.toString());
+                
+                const updateData = {
+                    walletAddress: address,
+                    walletConnected: true,
+                    lastUpdated: window.serverTimestamp()
+                };
+
+                // If we have proof, save it for verification
+                if (proof) {
+                    updateData.tonProof = proof;
+                }
+
+                await window.firestoreUpdateDoc(userRef, updateData);
+                console.log('💾 Wallet saved to Firestore');
+            } catch (error) {
+                console.error('Error saving wallet to Firestore:', error);
+            }
+        }
+
+        // HAMSTER STYLE: Manual connect for fallback
+        function manualWalletConnect() {
+            if (tonConnectUI) {
+                tonConnectUI.openModal();
+            } else {
+                showModal('⚠️', 'Wallet Error', 'Unable to initialize wallet connection. Please try refreshing the page or use the desktop version.');
+            }
+        }
+
+        // HAMSTER STYLE: Show fallback button if SDK fails
+        function showFallbackWalletButton() {
+            const tonBtn = document.getElementById('ton-connect-button');
+            const fallbackBtn = document.getElementById('walletFallbackBtn');
+            
+            if (tonBtn) tonBtn.style.display = 'none';
+            if (fallbackBtn) fallbackBtn.style.display = 'block';
+        }
+
+        // ============================================
+        // INITIALIZATION
+        // ============================================
+        function initGame() {
+            console.log("🎮 Initializing game...");
+            
+            gameState.telegramUserId = window.telegramId;
+            gameState.username = window.username;
+            
+            // Generate referral code
+            if (!gameState.referralCode && gameState.telegramUserId) {
+                gameState.referralCode = 'GH' + gameState.telegramUserId.toString().slice(-6);
+                localStorage.setItem('goldhunt_referralCode', gameState.referralCode);
+            }
+            
+            // Load existing stats from Firebase
+            if (window.existingReferralCount !== undefined) {
+                gameState.referralCount = window.existingReferralCount;
+            }
+            if (window.existingReferralGold !== undefined) {
+                gameState.referralGoldEarned = window.existingReferralGold;
+            }
+            
+            // Initialize TON Connect (Hamster Style)
+            initTonConnect();
+            
+            // Update UI
+            updateReferralDisplay();
+            updateUI();
+            
+            // Check for referral bonus
+            if (window.referralBonus && window.referralBonus > 0) {
+                setTimeout(() => {
+                    showModal('🎁', 'Welcome Bonus!', `You received ${window.referralBonus.toLocaleString()} GOLD for joining with a referral code!`);
+                    window.referralBonus = 0;
+                }, 2000);
+            }
+            
+            // Setup tap handler
+            setupTapHandler();
+            
+            window.gameInitialized = true;
+        }
+
+        // ============================================
+        // TAP HANDLER
+        // ============================================
+        function setupTapHandler() {
+            const character = document.getElementById('characterContainer');
+            
+            character.addEventListener('touchstart', handleTap, { passive: false });
+            character.addEventListener('mousedown', handleTap);
+            
+            function handleTap(e) {
+                e.preventDefault();
+                
+                if (gameState.energy <= 0) {
+                    showToast('⚡ No energy! Wait for recharge.');
+                    return;
+                }
+                
+                const earned = getTotalEarnPerTap();
+                gameState.gold += earned;
+                gameState.energy--;
+                gameState.totalTaps++;
+                
+                saveGame();
+                updateUI();
+                
+                character.classList.add('tapping');
+                setTimeout(() => character.classList.remove('tapping'), 300);
+                
+                const rect = character.getBoundingClientRect();
+                const x = (e.touches ? e.touches[0].clientX : e.clientX) - rect.left;
+                const y = (e.touches ? e.touches[0].clientY : e.clientY) - rect.top;
+                
+                createFloatingGold(x, y, earned);
+            }
+        }
+
+        function createFloatingGold(x, y, amount) {
+            const el = document.createElement('div');
+            el.className = 'floating-gold';
+            el.textContent = `+${amount}`;
+            el.style.left = x + 'px';
+            el.style.top = (y - 50) + 'px';
+            document.getElementById('characterContainer').appendChild(el);
+            setTimeout(() => el.remove(), 1000);
+        }
+
+        // ============================================
+        // REFERRAL SYSTEM
+        // ============================================
+        function updateReferralDisplay() {
+            const linkEl = document.getElementById('referralLink');
+            const code = gameState.referralCode || 'GHXXXXXX';
+            
+            // HAMSTER STYLE: Use proper bot link format
+            const link = `https://t.me/Goldhunt101bot?start=${code}`;
+            
+            linkEl.textContent = link;
+            
+            document.getElementById('referralCount').textContent = gameState.referralCount;
+            document.getElementById('referralEarnings').textContent = gameState.referralGoldEarned.toLocaleString();
+        }
+
+        function copyReferralLink() {
+            const code = gameState.referralCode || 'GHXXXXXX';
+            const link = `https://t.me/Goldhunt101bot?start=${code}`;
+            const message = `🎮 Join me in GoldHunt!\n\nUse my code: ${code}\n\nGet 20,000 GOLD starter bonus! 🎁\n\n${link}`;
+            
+            if (navigator.clipboard) {
+                navigator.clipboard.writeText(message).then(() => {
+                    showToast('📋 Copied! Send to friends on Telegram');
+                }).catch(() => fallbackCopy(message));
+            } else {
+                fallbackCopy(message);
+            }
+        }
+
+        function fallbackCopy(text) {
+            const textarea = document.createElement('textarea');
+            textarea.value = text;
+            document.body.appendChild(textarea);
+            textarea.select();
+            document.execCommand('copy');
+            document.body.removeChild(textarea);
+            showToast('📋 Copied! Send to friends on Telegram');
+        }
+
+        // ============================================
+        // UI FUNCTIONS
+        // ============================================
+        function getCurrentRank() {
+            for (let i = rankSystem.length - 1; i >= 0; i--) {
+                if (gameState.gold >= rankSystem[i].min) return rankSystem[i];
+            }
+            return rankSystem[0];
+        }
+
+        function getTotalEarnPerTap() {
+            return gameState.earnPerTap + getCurrentRank().boost;
+        }
+
+        function updateUI() {
+            document.getElementById('goldAmount').textContent = gameState.gold.toLocaleString();
+            document.getElementById('earnPerTap').textContent = '+' + getTotalEarnPerTap();
+            document.getElementById('totalTaps').textContent = gameState.totalTaps.toLocaleString();
+            document.getElementById('energyText').textContent = `${gameState.energy}/${gameState.maxEnergy}`;
+            document.getElementById('energyFill').style.width = `${(gameState.energy / gameState.maxEnergy) * 100}%`;
+            
+            const rank = getCurrentRank();
+            const badge = document.getElementById('rankBadge');
+            badge.innerHTML = `<span class="rank-icon">${rank.icon}</span><span class="rank-name">${rank.name}</span><span class="rank-boost">(+${rank.boost}/tap)</span>`;
+            
+            const nextRank = rankSystem.find(r => r.min > gameState.gold);
+            if (nextRank) {
+                const progress = ((gameState.gold - rank.min) / (nextRank.min - rank.min)) * 100;
+                document.getElementById('rankProgressFill').style.width = Math.min(progress, 100) + '%';
+                document.getElementById('rankProgressText').textContent = `${gameState.gold.toLocaleString()}/${nextRank.min.toLocaleString()}`;
+            } else {
+                document.getElementById('rankProgressFill').style.width = '100%';
+                document.getElementById('rankProgressText').textContent = 'MAX RANK!';
+            }
+        }
+
+        function saveGame() {
+            localStorage.setItem('goldhunt_gold', gameState.gold);
+            localStorage.setItem('goldhunt_energy', gameState.energy);
+            localStorage.setItem('goldhunt_maxEnergy', gameState.maxEnergy);
+            localStorage.setItem('goldhunt_earnPerTap', gameState.earnPerTap);
+            localStorage.setItem('goldhunt_totalTaps', gameState.totalTaps);
+            localStorage.setItem('goldhunt_referralCount', gameState.referralCount);
+            localStorage.setItem('goldhunt_referralGoldEarned', gameState.referralGoldEarned);
+            
+            if (window.firestoreDB && gameState.telegramUserId) {
+                saveToFirestore();
+            }
+        }
+
+        async function saveToFirestore() {
+            try {
+                const userRef = window.firestoreDoc(window.firestoreDB, 'users', gameState.telegramUserId.toString());
+                await window.firestoreSetDoc(userRef, {
+                    telegramId: gameState.telegramUserId,
+                    username: gameState.username,
+                    gold: gameState.gold,
+                    energy: gameState.energy,
+                    totalTaps: gameState.totalTaps,
+                    referralCount: gameState.referralCount,
+                    referralGoldEarned: gameState.referralGoldEarned,
+                    walletAddress: gameState.walletAddress,
+                    lastUpdated: window.serverTimestamp()
+                }, { merge: true });
+            } catch (error) {
+                console.error('Firestore save error:', error);
+            }
+        }
+
+        // ============================================
+        // NAVIGATION
+        // ============================================
+        function navigateTo(page) {
+            document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+            document.getElementById(page + 'Page').classList.add('active');
+            
+            document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
+            document.querySelector(`[data-page="${page}"]`).classList.add('active');
+        }
+
+        // ============================================
+        // MODAL & TOAST
+        // ============================================
+        function showModal(icon, title, desc) {
+            document.getElementById('modalIcon').textContent = icon;
+            document.getElementById('modalTitle').textContent = title;
+            document.getElementById('modalDesc').textContent = desc;
+            document.getElementById('modal').classList.add('active');
+        }
+
+        function closeModal() {
+            document.getElementById('modal').classList.remove('active');
+        }
+
+        function showToast(message) {
+            const toast = document.getElementById('toast');
+            toast.textContent = message;
+            toast.classList.add('show');
+            setTimeout(() => toast.classList.remove('show'), 3000);
+        }
+
+        // ============================================
+        // ENERGY RECHARGE
+        // ============================================
+        setInterval(() => {
+            if (gameState.energy < gameState.maxEnergy) {
+                gameState.energy++;
+                saveGame();
+                updateUI();
+            }
+        }, 2000);
+
+        // ============================================
+        // START GAME
+        // ============================================
+        window.addEventListener('firebaseHookReady', initGame);
+        setTimeout(() => {
+            if (!window.gameInitialized) initGame();
+        }, 3000);
+    </script>
+</body>
+</html>
