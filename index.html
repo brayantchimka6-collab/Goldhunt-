@@ -1,0 +1,2187 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>GoldHunt - Tap to Earn</title>
+    <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+    
+    <script src="https://telegram.org/js/telegram-web-app.js"></script>
+    <script src="https://unpkg.com/@tonconnect/ui@latest/dist/tonconnect-ui.min.js"></script>
+    <script src="https://sad.adsgram.ai/js/sad.min.js"></script>
+
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/12.9.0/firebase-app.js";
+        import { getAnalytics } from "https://www.gstatic.com/firebasejs/12.9.0/firebase-analytics.js";
+        import { 
+            getFirestore, 
+            doc, 
+            setDoc, 
+            getDoc, 
+            updateDoc, 
+            collection,
+            query,
+            orderBy,
+            limit,
+            getDocs,
+            serverTimestamp,
+            increment,
+            arrayUnion,
+            writeBatch,
+            onSnapshot,
+            where
+        } from "https://www.gstatic.com/firebasejs/12.9.0/firebase-firestore.js";
+        
+        const firebaseConfig = {
+            apiKey: "AIzaSyCLsEBXOrhtQaTg9LoXnVmGj3UIYrvhoeY",
+            authDomain: "goldhunt-4e6f0.firebaseapp.com",
+            projectId: "goldhunt-4e6f0",
+            storageBucket: "goldhunt-4e6f0.firebasestorage.app",
+            messagingSenderId: "278254214273",
+            appId: "1:278254214273:web:dc48dc2ce9c0c06feb4180",
+            measurementId: "G-L0XTTGL59L"
+        };
+
+        const app = initializeApp(firebaseConfig);
+        const analytics = getAnalytics(app);
+        const db = getFirestore(app);
+        
+        // Global Firebase references
+        window.firestoreDB = db;
+        window.firestoreDoc = doc;
+        window.firestoreSetDoc = setDoc;
+        window.firestoreGetDoc = getDoc;
+        window.firestoreUpdateDoc = updateDoc;
+        window.firestoreCollection = collection;
+        window.firestoreQuery = query;
+        window.firestoreOrderBy = orderBy;
+        window.firestoreLimit = limit;
+        window.firestoreGetDocs = getDocs;
+        window.serverTimestamp = serverTimestamp;
+        window.firestoreIncrement = increment;
+        window.firestoreArrayUnion = arrayUnion;
+        window.firestoreWriteBatch = writeBatch;
+        window.firestoreOnSnapshot = onSnapshot;
+        window.firestoreWhere = where;
+
+        function initializeTelegramHook() {
+            if (!window.Telegram || !window.Telegram.WebApp) {
+                setTimeout(initializeTelegramHook, 500);
+                return;
+            }
+            
+            const tg = window.Telegram.WebApp;
+            tg.ready();
+            tg.expand();
+            
+            const telegramUser = tg.initDataUnsafe?.user;
+            const telegramId = telegramUser?.id;
+            const playerName = telegramUser?.first_name || "Guest";
+            const username = telegramUser?.username || null; // Can be null if no username set
+            const startParam = tg.initDataUnsafe?.start_param;
+            
+            window.telegramId = telegramId;
+            window.telegramUser = telegramUser;
+            window.playerName = playerName;
+            window.username = username;
+            window.tg = tg;
+            window.startParam = startParam;
+            
+            if (telegramId) {
+                initializeFirestoreUser(telegramId, username, playerName, startParam);
+            } else {
+                window.telegramId = 'test_' + Date.now();
+                window.username = null;
+                window.playerName = 'TestUser';
+                window.dispatchEvent(new Event('firebaseHookReady'));
+            }
+        }
+        
+        async function initializeFirestoreUser(telegramId, username, playerName, referralCode) {
+            try {
+                console.log("🔥 INITIALIZING USER:", telegramId, "Referral:", referralCode);
+                
+                const userRef = doc(db, 'users', telegramId.toString());
+                const userSnap = await getDoc(userRef);
+                
+                if (!userSnap.exists()) {
+                    let referredBy = null;
+                    
+                    // Handle referral - REWARD THE REFERRER IMMEDIATELY
+                    if (referralCode && referralCode.startsWith('GH')) {
+                        const referrerId = await validateReferralCode(referralCode);
+                        
+                        if (referrerId && referrerId !== telegramId) {
+                            referredBy = referrerId;
+                            const rewardSuccess = await giveReferrerReward(referrerId, telegramId, username || playerName, 20000);
+                            
+                            if (rewardSuccess) {
+                                window.referralSuccess = { referrerId, amount: 20000 };
+                                console.log("✅ Referrer rewarded 20K");
+                            }
+                        }
+                    }
+                    
+                    // Check if username needs to be set
+                    const needsUsername = !username;
+                    
+                    await setDoc(userRef, {
+                        telegramId: telegramId,
+                        username: username, // Can be null initially
+                        displayName: username || playerName, // What shows on leaderboard
+                        playerName: playerName,
+                        gold: 0,
+                        totalTaps: 0,
+                        rank: 'Wood',
+                        referredBy: referredBy,
+                        referrals: [],
+                        referralCount: 0,
+                        referralGoldEarned: 0,
+                        walletAddress: null,
+                        createdAt: serverTimestamp(),
+                        lastUpdated: serverTimestamp(),
+                        checkinStreak: 0,
+                        lastCheckin: null,
+                        tasksCompleted: {},
+                        autoclickerEndTime: null,
+                        boosts: { energy: { level: 1, cost: 5000 } },
+                        needsUsername: needsUsername // Flag to show username modal
+                    });
+                    
+                    if (needsUsername) {
+                        window.showUsernameModal = true;
+                    }
+                    
+                } else {
+                    const userData = userSnap.data();
+                    window.existingReferralCount = userData.referralCount || 0;
+                    window.existingReferralGold = userData.referralGoldEarned || 0;
+                    window.userDisplayName = userData.displayName || userData.username || userData.playerName;
+                    
+                    // Check if user still needs to set username
+                    if (userData.needsUsername || (!userData.username && !userData.displayName)) {
+                        window.showUsernameModal = true;
+                    }
+                    
+                    // Setup real-time listener for new referrals
+                    setupReferralListener(telegramId);
+                }
+                
+                window.dispatchEvent(new Event('firebaseHookReady'));
+            } catch (error) {
+                console.error("❌ Firestore init error:", error);
+                window.dispatchEvent(new Event('firebaseHookReady'));
+            }
+        }
+        
+        // FIXED: Better referral code validation using the actual referrer's ID
+        async function validateReferralCode(code) {
+            try {
+                // Extract the ID from code (GH + last 6 digits of telegramId)
+                const codeSuffix = code.replace('GH', '');
+                
+                // Query for user whose telegramId ends with this suffix
+                // Since we can't query by suffix directly, we'll query recent users and check
+                const usersRef = collection(db, 'users');
+                const q = query(usersRef, orderBy('createdAt', 'desc'), limit(100));
+                const querySnapshot = await getDocs(q);
+                
+                for (const docSnap of querySnapshot.docs) {
+                    const userData = docSnap.data();
+                    const userId = userData.telegramId.toString();
+                    // Check if this user's ID ends with the code suffix
+                    if (userId.slice(-6) === codeSuffix) {
+                        return userData.telegramId;
+                    }
+                }
+                
+                // Also check if code matches full ID for edge cases
+                const exactMatchQuery = query(usersRef, where('telegramId', '==', parseInt(codeSuffix)), limit(1));
+                const exactMatch = await getDocs(exactMatchQuery);
+                if (!exactMatch.empty) {
+                    return exactMatch.docs[0].data().telegramId;
+                }
+                
+                return null;
+            } catch (error) {
+                console.error("Error validating referral code:", error);
+                return null;
+            }
+        }
+        
+        // FIXED: Proper referrer reward with atomic batch write
+        async function giveReferrerReward(referrerId, newUserId, newUserName, amount) {
+            try {
+                const batch = writeBatch(db);
+                const referrerRef = doc(db, 'users', referrerId.toString());
+                
+                // Get referrer's current data for notification
+                const referrerSnap = await getDoc(referrerRef);
+                const referrerData = referrerSnap.exists() ? referrerSnap.data() : null;
+                
+                // Update referrer's data
+                batch.update(referrerRef, {
+                    gold: increment(amount),
+                    referralCount: increment(1),
+                    referralGoldEarned: increment(amount),
+                    referrals: arrayUnion({
+                        userId: newUserId,
+                        username: newUserName || 'Anonymous',
+                        joinedAt: serverTimestamp(),
+                        reward: amount,
+                        rewarded: true
+                    }),
+                    lastUpdated: serverTimestamp()
+                });
+                
+                // Create referral record for tracking
+                const recordRef = doc(collection(db, 'referralRecords'));
+                batch.set(recordRef, {
+                    referrerId: referrerId,
+                    referredId: newUserId,
+                    referredUsername: newUserName || 'Anonymous',
+                    rewardAmount: amount,
+                    createdAt: serverTimestamp(),
+                    status: 'completed'
+                });
+                
+                await batch.commit();
+                console.log(`✅ ${amount} gold given to referrer ${referrerId}`);
+                
+                // Send notification to referrer if they're online
+                if (referrerData && window.notifyReferrer) {
+                    window.notifyReferrer(referrerId, amount, newUserName);
+                }
+                
+                return true;
+            } catch (error) {
+                console.error("❌ Error giving referrer reward:", error);
+                return false;
+            }
+        }
+        
+        // Real-time referral listener
+        function setupReferralListener(userId) {
+            const userRef = doc(db, 'users', userId.toString());
+            onSnapshot(userRef, (doc) => {
+                if (doc.exists()) {
+                    const data = doc.data();
+                    const newCount = data.referralCount || 0;
+                    const newGold = data.referralGoldEarned || 0;
+                    
+                    // If there are new referrals, notify the user
+                    if (newCount > (window.lastKnownReferralCount || 0)) {
+                        const diff = newCount - (window.lastKnownReferralCount || 0);
+                        const goldEarned = newGold - (window.lastKnownReferralGold || 0);
+                        window.newReferralAlert = {
+                            count: diff,
+                            gold: goldEarned
+                        };
+                        
+                        // Update localStorage for persistence
+                        localStorage.setItem('goldhunt_referralCount', newCount);
+                        localStorage.setItem('goldhunt_referralGoldEarned', newGold);
+                    }
+                    
+                    window.lastKnownReferralCount = newCount;
+                    window.lastKnownReferralGold = newGold;
+                    window.existingReferralCount = newCount;
+                    window.existingReferralGold = newGold;
+                    window.userDisplayName = data.displayName || data.username || data.playerName;
+                }
+            });
+        }
+        
+        // Update username function
+        window.updateUsername = async function(newUsername) {
+            try {
+                if (!window.telegramId) return false;
+                
+                // Validate username
+                if (!newUsername || newUsername.length < 3 || newUsername.length > 20) {
+                    return false;
+                }
+                
+                // Check if username is taken
+                const usersRef = collection(db, 'users');
+                const q = query(usersRef, where('username', '==', newUsername), limit(1));
+                const existing = await getDocs(q);
+                
+                if (!existing.empty) {
+                    const docData = existing.docs[0].data();
+                    if (docData.telegramId !== window.telegramId) {
+                        return 'taken';
+                    }
+                }
+                
+                const userRef = doc(db, 'users', window.telegramId.toString());
+                await updateDoc(userRef, {
+                    username: newUsername,
+                    displayName: newUsername,
+                    needsUsername: false,
+                    lastUpdated: serverTimestamp()
+                });
+                
+                window.username = newUsername;
+                window.userDisplayName = newUsername;
+                return true;
+            } catch (error) {
+                console.error("Error updating username:", error);
+                return false;
+            }
+        };
+        
+        window.checkReferralStatus = async function(userId) {
+            try {
+                const userRef = doc(db, 'users', userId.toString());
+                const userSnap = await getDoc(userRef);
+                if (userSnap.exists()) {
+                    return userSnap.data();
+                }
+                return null;
+            } catch (error) {
+                return null;
+            }
+        };
+        
+        initializeTelegramHook();
+    </script>
+    
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; -webkit-tap-highlight-color: transparent; user-select: none; touch-action: manipulation; }
+        body { font-family: 'Poppins', sans-serif; background: linear-gradient(135deg, #1a0a2e 0%, #16213e 50%, #0f3460 100%); min-height: 100vh; color: #fff; overflow-x: hidden; }
+        .app-container { max-width: 480px; margin: 0 auto; min-height: 100vh; position: relative; padding-bottom: 80px; }
+        
+        .header { display: flex; justify-content: space-between; align-items: center; padding: 15px 20px; background: rgba(0, 0, 0, 0.3); backdrop-filter: blur(10px); }
+        .logo { display: flex; align-items: center; gap: 10px; }
+        .logo-icon { width: 40px; height: 40px; background: linear-gradient(135deg, #ffd700, #ffaa00); border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 24px; }
+        .logo-text { font-size: 20px; font-weight: 700; background: linear-gradient(135deg, #ffd700, #ffaa00); -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text; }
+        
+        #ton-connect-button { transform: scale(0.85); transform-origin: right center; }
+        .wallet-connect-btn { display: none; padding: 10px 20px; background: linear-gradient(135deg, #31d158, #28a745); border: none; border-radius: 25px; color: #fff; font-weight: 600; font-size: 13px; cursor: pointer; }
+        
+        .stats-bar { display: flex; justify-content: space-around; padding: 15px; background: rgba(255, 255, 255, 0.05); margin: 10px; border-radius: 15px; }
+        .stat-item { text-align: center; }
+        .stat-label { font-size: 11px; color: #888; text-transform: uppercase; }
+        .stat-value { font-size: 16px; font-weight: 700; color: #ffd700; }
+        
+        .rank-badge { display: flex; align-items: center; justify-content: center; gap: 8px; padding: 8px 15px; background: rgba(255, 215, 0, 0.1); border-radius: 20px; margin: 10px auto; max-width: 280px; border: 1px solid rgba(255, 215, 0, 0.3); }
+        .rank-icon { font-size: 20px; }
+        .rank-name { font-weight: 700; font-size: 14px; color: #ffd700; }
+        .rank-boost { font-size: 11px; color: #888; }
+        
+        .game-area { display: flex; flex-direction: column; align-items: center; padding: 20px; position: relative; }
+        .gold-display { text-align: center; margin-bottom: 15px; }
+        .gold-amount { font-size: 42px; font-weight: 800; background: linear-gradient(135deg, #ffd700, #ffaa00); -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text; text-shadow: 0 0 30px rgba(255, 215, 0, 0.3); }
+        .gold-label { font-size: 14px; color: #888; }
+        
+        .progress-section { width: 100%; max-width: 300px; margin-bottom: 20px; }
+        .progress-info { display: flex; justify-content: space-between; margin-bottom: 5px; font-size: 12px; }
+        .progress-bar { height: 8px; background: rgba(255, 255, 255, 0.1); border-radius: 4px; overflow: hidden; }
+        .progress-fill { height: 100%; background: linear-gradient(90deg, #ffd700, #ffaa00); border-radius: 4px; transition: width 0.3s ease; }
+        
+        .character-container { position: relative; width: 240px; height: 240px; cursor: pointer; transition: transform 0.1s cubic-bezier(0.68, -0.55, 0.265, 1.55); touch-action: none; }
+        .character-container:active { transform: scale(0.92) translateY(10px); }
+        .character-container.tapping { animation: character-bounce 0.3s ease-out; }
+        @keyframes character-bounce { 0% { transform: scale(1) translateY(0); } 40% { transform: scale(0.85) translateY(20px); } 60% { transform: scale(1.05) translateY(-10px); } 100% { transform: scale(1) translateY(0); } }
+        
+        .character-shadow { position: absolute; bottom: 10px; left: 50%; transform: translateX(-50%); width: 140px; height: 30px; background: radial-gradient(ellipse, rgba(0,0,0,0.4) 0%, transparent 70%); border-radius: 50%; }
+        
+        .thief-character { width: 100%; height: 100%; position: relative; animation: idle-float 3s ease-in-out infinite; }
+        @keyframes idle-float { 0%, 100% { transform: translateY(0px); } 50% { transform: translateY(-8px); } }
+        
+        .thief-body { position: absolute; bottom: 30px; left: 50%; transform: translateX(-50%); width: 160px; height: 140px; background: linear-gradient(135deg, #8B4513 0%, #A0522D 50%, #654321 100%); border-radius: 50% 50% 45% 45%; box-shadow: 0 10px 30px rgba(0,0,0,0.4); border: 3px solid #5D3A1A; }
+        .thief-head { position: absolute; top: 20px; left: 50%; transform: translateX(-50%); width: 130px; height: 110px; background: linear-gradient(135deg, #8B4513 0%, #A0522D 50%, #654321 100%); border-radius: 50%; border: 3px solid #5D3A1A; z-index: 10; }
+        .ear { position: absolute; width: 35px; height: 35px; background: linear-gradient(135deg, #8B4513, #654321); border-radius: 50% 50% 0 0; border: 2px solid #5D3A1A; top: -5px; }
+        .ear.left { left: 15px; transform: rotate(-20deg); }
+        .ear.right { right: 15px; transform: rotate(20deg); }
+        .face { position: absolute; top: 35px; left: 50%; transform: translateX(-50%); width: 90px; height: 60px; }
+        .eye { position: absolute; width: 28px; height: 32px; background: #fff; border-radius: 50%; top: 0; border: 2px solid #333; overflow: hidden; }
+        .eye.left { left: 8px; }
+        .eye.right { right: 8px; }
+        .pupil { position: absolute; width: 14px; height: 18px; background: linear-gradient(135deg, #4A3000, #2A1A00); border-radius: 50%; top: 50%; left: 50%; transform: translate(-50%, -50%); }
+        .eye-mask { position: absolute; top: 28px; left: 50%; transform: translateX(-50%); width: 80px; height: 25px; background: linear-gradient(135deg, #2C2C2C, #1A1A1A); border-radius: 0 0 40% 40%; z-index: 5; }
+        .nose { position: absolute; top: 42px; left: 50%; transform: translateX(-50%); width: 12px; height: 10px; background: linear-gradient(135deg, #FF6B6B, #EE5A24); border-radius: 50%; z-index: 6; }
+        .mouth { position: absolute; bottom: 5px; left: 50%; transform: translateX(-50%); width: 30px; height: 15px; border-bottom: 3px solid #333; border-radius: 0 0 50% 50%; }
+        .thief-hat { position: absolute; top: -15px; left: 50%; transform: translateX(-50%); width: 100px; height: 50px; background: linear-gradient(135deg, #2C2C2C, #1A1A1A); border-radius: 50% 50% 0 0; z-index: 15; }
+        .arm { position: absolute; width: 40px; height: 70px; background: linear-gradient(135deg, #8B4513, #654321); border-radius: 20px; top: 80px; border: 2px solid #5D3A1A; z-index: 5; }
+        .arm.left { left: 20px; transform: rotate(20deg); }
+        .arm.right { right: 20px; transform: rotate(-20deg); }
+        .gold-bag { position: absolute; bottom: 20px; right: 10px; width: 60px; height: 70px; background: linear-gradient(135deg, #DAA520, #B8860B); border-radius: 10px 10px 30% 30%; border: 3px solid #8B6914; z-index: 8; transform: rotate(15deg); animation: bag-sway 2s ease-in-out infinite; }
+        @keyframes bag-sway { 0%, 100% { transform: rotate(15deg) translateY(0); } 50% { transform: rotate(10deg) translateY(-5px); } }
+        .bag-dollar { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); font-size: 24px; font-weight: 800; color: #FFD700; }
+        
+        .booster-ring { position: absolute; width: 280px; height: 280px; border: 5px solid transparent; border-radius: 50%; top: 50%; left: 50%; transform: translate(-50%, -50%); pointer-events: none; }
+        .booster-ring.active { border-color: #ff00ff; box-shadow: 0 0 40px #ff00ff, inset 0 0 40px #ff00ff; animation: pulse-ring 0.5s ease-in-out infinite; }
+        @keyframes pulse-ring { 0%, 100% { transform: translate(-50%, -50%) scale(1); } 50% { transform: translate(-50%, -50%) scale(1.08); } }
+        
+        .booster-timer { position: absolute; top: -40px; left: 50%; transform: translateX(-50%); background: linear-gradient(135deg, #ff00ff, #ff0066); padding: 8px 20px; border-radius: 20px; font-weight: 700; font-size: 16px; display: none; z-index: 20; }
+        .booster-timer.active { display: block; }
+        
+        .autoclicker-indicator { position: absolute; bottom: -50px; left: 50%; transform: translateX(-50%); background: linear-gradient(135deg, #00ff88, #00cc6a); padding: 8px 20px; border-radius: 20px; font-weight: 700; font-size: 14px; display: none; z-index: 20; }
+        .autoclicker-indicator.active { display: block; }
+        
+        .floating-gold { position: absolute; font-weight: 800; font-size: 24px; color: #ffd700; pointer-events: none; animation: float-up 1s ease-out forwards; z-index: 100; }
+        @keyframes float-up { 0% { opacity: 1; transform: translateY(0) scale(1); } 100% { opacity: 0; transform: translateY(-120px) scale(1.3); } }
+        
+        .energy-section { width: 100%; max-width: 300px; margin-top: 60px; }
+        .energy-header { display: flex; justify-content: space-between; margin-bottom: 8px; font-size: 14px; }
+        .energy-bar { height: 14px; background: rgba(255, 255, 255, 0.1); border-radius: 7px; overflow: hidden; }
+        .energy-fill { height: 100%; background: linear-gradient(90deg, #ff416c, #ff4b2b); border-radius: 7px; transition: width 0.3s ease; }
+        
+        /* Referral Section */
+        .referral-section { background: rgba(255, 255, 255, 0.05); border-radius: 15px; padding: 20px; margin: 15px 10px; text-align: center; border: 1px solid rgba(255, 215, 0, 0.2); }
+        .referral-title { font-size: 16px; color: #ffd700; margin-bottom: 15px; font-weight: 700; }
+        .referral-link-box { background: rgba(0, 0, 0, 0.3); border: 2px dashed rgba(255, 215, 0, 0.5); border-radius: 12px; padding: 15px; margin-bottom: 15px; word-break: break-all; }
+        .referral-link { font-family: monospace; font-size: 13px; color: #ffd700; line-height: 1.5; }
+        .copy-link-btn { width: 100%; padding: 12px; background: linear-gradient(135deg, #ffd700, #ffaa00); border: none; border-radius: 10px; color: #1a0a2e; font-weight: 700; font-size: 14px; cursor: pointer; transition: all 0.3s ease; }
+        .copy-link-btn:hover { transform: scale(1.02); box-shadow: 0 5px 20px rgba(255, 215, 0, 0.4); }
+        .referral-stats { display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; margin-top: 15px; }
+        .referral-stat { background: rgba(0, 0, 0, 0.2); padding: 12px; border-radius: 10px; }
+        .referral-stat-value { font-size: 22px; font-weight: 700; color: #ffd700; }
+        .referral-stat-label { font-size: 11px; color: #888; }
+        .recent-referrals { margin-top: 15px; text-align: left; }
+        .recent-referrals-title { font-size: 13px; color: #888; margin-bottom: 8px; text-align: center; }
+        .recent-referral-item { background: rgba(0, 255, 136, 0.1); border: 1px solid rgba(0, 255, 136, 0.3); border-radius: 8px; padding: 10px; margin-bottom: 8px; display: flex; justify-content: space-between; align-items: center; }
+        .recent-referral-name { font-size: 13px; color: #fff; }
+        .recent-referral-amount { font-size: 12px; color: #00ff88; font-weight: 700; }
+        
+        /* Username Modal Styles */
+        .username-modal-overlay { position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0, 0, 0, 0.95); display: none; align-items: center; justify-content: center; z-index: 2000; padding: 20px; }
+        .username-modal-overlay.active { display: flex; }
+        .username-modal { background: linear-gradient(135deg, #1a0a2e, #16213e); border-radius: 20px; padding: 30px; max-width: 350px; width: 100%; text-align: center; border: 2px solid #ffd700; box-shadow: 0 0 40px rgba(255, 215, 0, 0.3); }
+        .username-modal-icon { font-size: 60px; margin-bottom: 15px; }
+        .username-modal-title { font-size: 24px; font-weight: 700; margin-bottom: 10px; color: #ffd700; }
+        .username-modal-desc { font-size: 14px; color: #888; margin-bottom: 20px; line-height: 1.5; }
+        .username-input-group { margin-bottom: 20px; }
+        .username-input { width: 100%; padding: 15px; background: rgba(255, 255, 255, 0.1); border: 2px solid rgba(255, 215, 0, 0.3); border-radius: 12px; color: #fff; font-size: 16px; text-align: center; font-family: 'Poppins', sans-serif; transition: all 0.3s ease; }
+        .username-input:focus { outline: none; border-color: #ffd700; box-shadow: 0 0 15px rgba(255, 215, 0, 0.3); }
+        .username-input::placeholder { color: #666; }
+        .username-error { color: #ff416c; font-size: 12px; margin-top: 8px; display: none; }
+        .username-error.active { display: block; }
+        .username-btn { width: 100%; padding: 15px; background: linear-gradient(135deg, #ffd700, #ffaa00); border: none; border-radius: 12px; color: #1a0a2e; font-weight: 700; font-size: 16px; cursor: pointer; transition: all 0.3s ease; }
+        .username-btn:hover:not(:disabled) { transform: scale(1.02); box-shadow: 0 10px 30px rgba(255, 215, 0, 0.4); }
+        .username-btn:disabled { background: #444; color: #888; cursor: not-allowed; }
+        .username-skip { margin-top: 15px; font-size: 12px; color: #888; cursor: pointer; text-decoration: underline; }
+        
+        /* Calendar Styles */
+        .calendar-container { background: rgba(255, 255, 255, 0.05); border-radius: 20px; padding: 20px; margin-bottom: 20px; }
+        .calendar-header { text-align: center; margin-bottom: 20px; }
+        .calendar-title { font-size: 24px; font-weight: 700; color: #ffd700; margin-bottom: 5px; }
+        .calendar-subtitle { font-size: 14px; color: #888; }
+        .calendar-month { display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px; padding: 0 10px; }
+        .calendar-nav { background: rgba(255, 255, 255, 0.1); border: none; color: #fff; width: 36px; height: 36px; border-radius: 50%; cursor: pointer; font-size: 18px; }
+        .calendar-nav:hover { background: rgba(255, 215, 0, 0.3); }
+        .calendar-month-name { font-size: 18px; font-weight: 600; color: #fff; }
+        .calendar-weekdays { display: grid; grid-template-columns: repeat(7, 1fr); gap: 5px; margin-bottom: 10px; text-align: center; }
+        .weekday { font-size: 12px; color: #888; font-weight: 600; padding: 5px; }
+        .calendar-days { display: grid; grid-template-columns: repeat(7, 1fr); gap: 5px; }
+        .calendar-day { aspect-ratio: 1; background: rgba(255, 255, 255, 0.05); border-radius: 10px; display: flex; flex-direction: column; align-items: center; justify-content: center; cursor: pointer; transition: all 0.3s ease; border: 2px solid transparent; position: relative; padding: 5px; }
+        .calendar-day:hover:not(.claimed):not(.future) { border-color: rgba(255, 215, 0, 0.5); transform: scale(1.05); }
+        .calendar-day.today { background: linear-gradient(135deg, rgba(255, 215, 0, 0.3), rgba(255, 165, 0, 0.3)); border-color: #ffd700; box-shadow: 0 0 15px rgba(255, 215, 0, 0.3); }
+        .calendar-day.claimed { background: linear-gradient(135deg, #11998e, #38ef7d); border-color: #00ff88; }
+        .calendar-day.future { opacity: 0.3; cursor: not-allowed; }
+        .calendar-day.past { opacity: 0.5; }
+        .day-number { font-size: 14px; font-weight: 600; color: #fff; }
+        .day-bonus { font-size: 10px; color: #ffd700; margin-top: 2px; }
+        .day-icon { font-size: 16px; position: absolute; top: 2px; right: 2px; }
+        .calendar-claim-btn { width: 100%; padding: 15px; background: linear-gradient(135deg, #ffd700, #ffaa00); border: none; border-radius: 12px; color: #1a0a2e; font-weight: 700; font-size: 16px; cursor: pointer; transition: all 0.3s ease; margin-top: 20px; }
+        .calendar-claim-btn:hover:not(:disabled) { transform: scale(1.02); box-shadow: 0 10px 30px rgba(255, 215, 0, 0.4); }
+        .calendar-claim-btn:disabled { background: #444; color: #888; cursor: not-allowed; }
+        .calendar-claim-btn.claimed { background: linear-gradient(135deg, #11998e, #38f9d7); color: #fff; }
+        .calendar-info { background: rgba(0, 0, 0, 0.3); border-radius: 10px; padding: 15px; margin-top: 20px; text-align: center; }
+        .calendar-info-text { font-size: 14px; color: #aaa; }
+        .calendar-info-highlight { color: #ffd700; font-weight: 700; }
+        
+        /* Tasks Styles */
+        .tasks-header { text-align: center; margin-bottom: 20px; }
+        .tasks-title { font-size: 28px; font-weight: 700; background: linear-gradient(135deg, #43e97b, #38f9d7); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+        .task-card { background: rgba(255, 255, 255, 0.05); border-radius: 15px; padding: 20px; margin-bottom: 15px; display: flex; align-items: center; gap: 15px; transition: all 0.3s ease; border: 1px solid transparent; }
+        .task-card:hover { border-color: rgba(255, 215, 0, 0.3); }
+        .task-icon { width: 50px; height: 50px; border-radius: 12px; display: flex; align-items: center; justify-content: center; font-size: 24px; }
+        .task-icon.x { background: linear-gradient(135deg, #000, #333); }
+        .task-icon.telegram { background: linear-gradient(135deg, #0088cc, #00a8e6); }
+        .task-icon.puzzle { background: linear-gradient(135deg, #9d50bb, #6e48aa); }
+        .task-icon.ads { background: linear-gradient(135deg, #ff416c, #ff4b2b); }
+        .task-details { flex: 1; }
+        .task-name { font-weight: 600; font-size: 16px; margin-bottom: 5px; }
+        .task-reward { font-size: 14px; color: #ffd700; }
+        .task-btn { padding: 10px 20px; background: linear-gradient(135deg, #667eea, #764ba2); border: none; border-radius: 20px; color: #fff; font-weight: 600; cursor: pointer; transition: all 0.3s ease; font-size: 12px; }
+        .task-btn:hover { transform: scale(1.05); }
+        .task-btn.completed { background: linear-gradient(135deg, #11998e, #38f9d7); }
+        
+        /* Puzzle Styles */
+        .puzzle-container { background: rgba(255, 255, 255, 0.05); border-radius: 20px; padding: 20px; margin-bottom: 20px; }
+        .puzzle-header { text-align: center; margin-bottom: 20px; }
+        .puzzle-title { font-size: 24px; font-weight: 700; color: #ffd700; margin-bottom: 5px; }
+        .puzzle-subtitle { font-size: 14px; color: #888; }
+        .puzzle-reward { background: linear-gradient(135deg, rgba(255, 215, 0, 0.2), rgba(255, 165, 0, 0.2)); border: 2px solid #ffd700; border-radius: 15px; padding: 15px; text-align: center; margin-bottom: 20px; }
+        .puzzle-reward-amount { font-size: 36px; font-weight: 800; color: #ffd700; }
+        .puzzle-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin-bottom: 20px; max-width: 320px; margin-left: auto; margin-right: auto; }
+        .puzzle-tile { aspect-ratio: 1; background: linear-gradient(135deg, #667eea, #764ba2); border-radius: 12px; display: flex; align-items: center; justify-content: center; font-size: 24px; font-weight: 700; cursor: pointer; transition: all 0.3s ease; border: 2px solid transparent; user-select: none; }
+        .puzzle-tile:hover { transform: scale(1.05); border-color: #ffd700; }
+        .puzzle-tile.selected { background: linear-gradient(135deg, #ffd700, #ffaa00); color: #1a0a2e; transform: scale(1.1); box-shadow: 0 0 20px rgba(255, 215, 0, 0.5); }
+        .puzzle-tile.correct { background: linear-gradient(135deg, #11998e, #38ef7d); animation: correct-pulse 0.5s ease; }
+        @keyframes correct-pulse { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.2); } }
+        .puzzle-tile.wrong { background: linear-gradient(135deg, #ff416c, #ff4b2b); animation: shake 0.5s ease; }
+        @keyframes shake { 0%, 100% { transform: translateX(0); } 25% { transform: translateX(-10px); } 75% { transform: translateX(10px); } }
+        .puzzle-info { display: flex; justify-content: space-between; margin-bottom: 15px; font-size: 14px; }
+        .puzzle-timer { color: #ff416c; font-weight: 700; }
+        .puzzle-attempts { color: #ffd700; }
+        .puzzle-btn { width: 100%; padding: 15px; background: linear-gradient(135deg, #ffd700, #ffaa00); border: none; border-radius: 12px; color: #1a0a2e; font-weight: 700; font-size: 16px; cursor: pointer; transition: all 0.3s ease; }
+        .puzzle-btn:hover:not(:disabled) { transform: scale(1.02); }
+        .puzzle-btn:disabled { background: #444; color: #888; cursor: not-allowed; }
+        .puzzle-instructions { background: rgba(0, 0, 0, 0.3); border-radius: 10px; padding: 15px; margin-top: 20px; font-size: 13px; color: #aaa; line-height: 1.6; }
+        
+        /* Leaderboard Styles */
+        .leaderboard-header { text-align: center; margin-bottom: 20px; }
+        .leaderboard-title { font-size: 28px; font-weight: 700; background: linear-gradient(135deg, #ffd700, #ffaa00); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+        .leaderboard-tabs { display: flex; justify-content: center; gap: 8px; margin-bottom: 20px; }
+        .tab-btn { padding: 10px 18px; border: 2px solid rgba(255, 215, 0, 0.3); background: transparent; color: #fff; border-radius: 25px; cursor: pointer; transition: all 0.3s ease; font-weight: 600; font-size: 12px; }
+        .tab-btn.active { background: linear-gradient(135deg, #ffd700, #ffaa00); border-color: transparent; color: #1a0a2e; }
+        .leaderboard-list { background: rgba(255, 255, 255, 0.05); border-radius: 15px; overflow: hidden; min-height: 200px; }
+        .leaderboard-item { display: flex; align-items: center; padding: 15px; border-bottom: 1px solid rgba(255, 255, 255, 0.1); transition: background 0.3s ease; }
+        .leaderboard-item:hover { background: rgba(255, 255, 255, 0.05); }
+        .leaderboard-item:last-child { border-bottom: none; }
+        .rank { width: 36px; height: 36px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-weight: 700; margin-right: 12px; font-size: 14px; }
+        .rank.gold { background: linear-gradient(135deg, #ffd700, #ffaa00); color: #1a0a2e; }
+        .rank.silver { background: linear-gradient(135deg, #c0c0c0, #a0a0a0); color: #1a0a2e; }
+        .rank.bronze { background: linear-gradient(135deg, #cd7f32, #b87333); color: #1a0a0e; }
+        .rank.other { background: rgba(255, 255, 255, 0.1); }
+        .player-info { flex: 1; }
+        .player-name { font-weight: 600; font-size: 14px; }
+        .player-rank-badge { font-size: 10px; color: #ffd700; margin-top: 2px; }
+        .player-gold { font-weight: 700; color: #ffd700; font-size: 14px; }
+        
+        /* Boost Styles */
+        .boost-header { text-align: center; margin-bottom: 20px; }
+        .boost-title { font-size: 28px; font-weight: 700; background: linear-gradient(135deg, #f093fb, #f5576c); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+        .boost-grid { display: grid; gap: 12px; }
+        .boost-card { background: rgba(255, 255, 255, 0.05); border-radius: 15px; padding: 18px; display: flex; align-items: center; gap: 15px; cursor: pointer; transition: all 0.3s ease; border: 2px solid transparent; }
+        .boost-card:hover { border-color: rgba(255, 215, 0, 0.3); transform: translateX(5px); }
+        .boost-card.disabled { opacity: 0.5; cursor: not-allowed; }
+        .boost-icon { width: 55px; height: 55px; border-radius: 15px; display: flex; align-items: center; justify-content: center; font-size: 28px; }
+        .boost-icon.energy { background: linear-gradient(135deg, #4facfe, #00f2fe); }
+        .boost-icon.autoclicker { background: linear-gradient(135deg, #ff00ff, #ff0066); }
+        .boost-details { flex: 1; }
+        .boost-name { font-weight: 700; font-size: 15px; margin-bottom: 4px; }
+        .boost-desc { font-size: 11px; color: #888; margin-bottom: 4px; }
+        .boost-level { font-size: 11px; color: #ffd700; }
+        .boost-cost { font-weight: 700; color: #ffd700; font-size: 14px; }
+        
+        .bottom-nav { position: fixed; bottom: 0; left: 50%; transform: translateX(-50%); width: 100%; max-width: 480px; background: rgba(0, 0, 0, 0.95); backdrop-filter: blur(10px); display: flex; justify-content: space-around; padding: 10px 0; border-top: 1px solid rgba(255, 255, 255, 0.1); z-index: 100; }
+        .nav-item { display: flex; flex-direction: column; align-items: center; gap: 3px; cursor: pointer; padding: 5px 12px; border-radius: 10px; transition: all 0.3s ease; }
+        .nav-item:hover { background: rgba(255, 255, 255, 0.1); }
+        .nav-item.active { color: #ffd700; }
+        .nav-icon { font-size: 22px; }
+        .nav-label { font-size: 9px; }
+        
+        .page { display: none; padding: 15px; }
+        .page.active { display: block; }
+        
+        .modal-overlay { position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0, 0, 0, 0.9); display: none; align-items: center; justify-content: center; z-index: 1000; padding: 20px; }
+        .modal-overlay.active { display: flex; }
+        .modal { background: linear-gradient(135deg, #1a0a2e, #16213e); border-radius: 20px; padding: 30px; max-width: 350px; width: 100%; text-align: center; border: 1px solid rgba(255, 215, 0, 0.2); }
+        .modal-icon { font-size: 60px; margin-bottom: 15px; }
+        .modal-title { font-size: 24px; font-weight: 700; margin-bottom: 10px; }
+        .modal-desc { font-size: 14px; color: #888; margin-bottom: 20px; white-space: pre-line; }
+        .modal-btn { padding: 12px 30px; border: none; border-radius: 25px; font-weight: 600; cursor: pointer; transition: all 0.3s ease; }
+        .modal-btn.confirm { background: linear-gradient(135deg, #ffd700, #ffaa00); color: #1a0a2e; }
+        
+        .toast { position: fixed; top: 100px; left: 50%; transform: translateX(-50%) translateY(-100px); background: linear-gradient(135deg, #11998e, #38ef7d); padding: 15px 30px; border-radius: 25px; font-weight: 600; opacity: 0; transition: all 0.3s ease; z-index: 1001; }
+        .toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+        
+        .particle { position: absolute; width: 12px; height: 12px; pointer-events: none; animation: particle-fade 0.6s ease-out forwards; }
+        .particle.gold { background: radial-gradient(circle, #FFD700, #FFA500); border-radius: 50%; }
+        .particle.sparkle { background: #fff; clip-path: polygon(50% 0%, 61% 35%, 98% 35%, 68% 57%, 79% 91%, 50% 70%, 21% 91%, 32% 57%, 2% 35%, 39% 35%); }
+        @keyframes particle-fade { 0% { opacity: 1; transform: scale(1); } 100% { opacity: 0; transform: scale(0) translate(var(--tx), var(--ty)); } }
+        
+        .coin-burst { position: absolute; width: 40px; height: 40px; background: radial-gradient(circle, #FFD700, #B8860B); border-radius: 50%; border: 3px solid #DAA520; pointer-events: none; animation: coin-burst-anim 0.8s ease-out forwards; z-index: 50; display: flex; align-items: center; justify-content: center; font-weight: 800; color: #8B6914; font-size: 18px; }
+        @keyframes coin-burst-anim { 0% { opacity: 1; transform: scale(0.5) translateY(0); } 50% { opacity: 1; transform: scale(1.2) translateY(-30px); } 100% { opacity: 0; transform: scale(0.8) translateY(-60px); } }
+        
+        /* Profile Section */
+        .profile-section { background: rgba(255, 255, 255, 0.05); border-radius: 15px; padding: 20px; margin: 15px 10px; text-align: center; border: 1px solid rgba(255, 215, 0, 0.2); }
+        .profile-header { display: flex; align-items: center; justify-content: center; gap: 15px; margin-bottom: 15px; }
+        .profile-avatar { width: 60px; height: 60px; background: linear-gradient(135deg, #ffd700, #ffaa00); border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 30px; }
+        .profile-info { text-align: left; }
+        .profile-name { font-size: 18px; font-weight: 700; color: #fff; }
+        .profile-username { font-size: 12px; color: #888; }
+        .profile-edit-btn { padding: 8px 20px; background: rgba(255, 215, 0, 0.2); border: 1px solid #ffd700; border-radius: 20px; color: #ffd700; font-size: 12px; cursor: pointer; transition: all 0.3s ease; }
+        .profile-edit-btn:hover { background: #ffd700; color: #1a0a2e; }
+        
+        @media (max-width: 480px) {
+            .character-container { width: 200px; height: 200px; }
+            .gold-amount { font-size: 32px; }
+            .puzzle-grid { gap: 8px; }
+            .calendar-day { font-size: 12px; }
+        }
+    </style>
+</head>
+<body>
+    <div class="app-container">
+        <div class="header">
+            <div class="logo">
+                <div class="logo-icon">🦝</div>
+                <div class="logo-text">GoldHunt</div>
+            </div>
+            <div id="ton-connect-button"></div>
+            <button class="wallet-connect-btn" id="walletFallbackBtn" onclick="manualWalletConnect()">Connect Wallet</button>
+        </div>
+
+        <div class="stats-bar">
+            <div class="stat-item">
+                <div class="stat-label">Earn per Tap</div>
+                <div class="stat-value" id="earnPerTap">+1</div>
+            </div>
+            <div class="stat-item">
+                <div class="stat-label">Profit/Hour</div>
+                <div class="stat-value" id="profitPerHour">0</div>
+            </div>
+            <div class="stat-item">
+                <div class="stat-label">Total Taps</div>
+                <div class="stat-value" id="totalTaps">0</div>
+            </div>
+        </div>
+
+        <div class="rank-badge" id="rankBadge">
+            <span class="rank-icon">🪵</span>
+            <span class="rank-name">Wood</span>
+            <span class="rank-boost">(+1/tap)</span>
+        </div>
+
+        <!-- HOME PAGE -->
+        <div class="page active" id="homePage">
+            <!-- Profile Section -->
+            <div class="profile-section" id="profileSection" style="display: none;">
+                <div class="profile-header">
+                    <div class="profile-avatar" id="profileAvatar">👤</div>
+                    <div class="profile-info">
+                        <div class="profile-name" id="profileName">Player</div>
+                        <div class="profile-username" id="profileUsername">@username</div>
+                    </div>
+                </div>
+                <button class="profile-edit-btn" onclick="showUsernameModal()">✏️ Edit Username</button>
+            </div>
+
+            <div class="game-area">
+                <div class="gold-display">
+                    <div class="gold-amount" id="goldAmount">0</div>
+                    <div class="gold-label">GOLD</div>
+                </div>
+
+                <div class="progress-section">
+                    <div class="progress-info">
+                        <span>Progress to Next Rank</span>
+                        <span id="rankProgressText">0/50K</span>
+                    </div>
+                    <div class="progress-bar">
+                        <div class="progress-fill" id="rankProgressFill" style="width: 0%"></div>
+                    </div>
+                </div>
+
+                <div class="character-container" id="characterContainer">
+                    <div class="booster-ring" id="boosterRing"></div>
+                    <div class="booster-timer" id="boosterTimer">50x: 40s</div>
+                    <div class="autoclicker-indicator" id="autoclickerIndicator">🤖 Auto: 7h</div>
+                    
+                    <div class="thief-character">
+                        <div class="character-shadow"></div>
+                        <div class="gold-bag"><div class="bag-dollar">$</div></div>
+                        <div class="arm left"></div>
+                        <div class="arm right"></div>
+                        <div class="thief-body"></div>
+                        <div class="thief-head">
+                            <div class="ear left"></div>
+                            <div class="ear right"></div>
+                            <div class="thief-hat"></div>
+                            <div class="face">
+                                <div class="eye left"><div class="pupil"></div></div>
+                                <div class="eye right"><div class="pupil"></div></div>
+                                <div class="eye-mask"></div>
+                                <div class="nose"></div>
+                                <div class="mouth"></div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="energy-section">
+                    <div class="energy-header">
+                        <span>⚡ Energy</span>
+                        <span id="energyText">1000/1000</span>
+                    </div>
+                    <div class="energy-bar">
+                        <div class="energy-fill" id="energyFill" style="width: 100%"></div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="referral-section">
+                <div class="referral-title">🎁 Invite Friends & Earn 20K GOLD</div>
+                <div class="referral-link-box">
+                    <div class="referral-link" id="referralLink">Loading...</div>
+                </div>
+                <button class="copy-link-btn" id="copyLinkBtn" onclick="copyReferralLink()">📋 Copy Invite Link</button>
+                <div class="referral-stats">
+                    <div class="referral-stat">
+                        <div class="referral-stat-value" id="referralCount">0</div>
+                        <div class="referral-stat-label">Friends Invited</div>
+                    </div>
+                    <div class="referral-stat">
+                        <div class="referral-stat-value" id="referralEarnings">0</div>
+                        <div class="referral-stat-label">Gold Earned</div>
+                    </div>
+                </div>
+                <div class="recent-referrals" id="recentReferrals" style="display: none;">
+                    <div class="recent-referrals-title">Recent Referrals</div>
+                    <div id="recentReferralsList"></div>
+                </div>
+            </div>
+        </div>
+
+        <!-- CALENDAR PAGE -->
+        <div class="page" id="checkinPage">
+            <div class="calendar-container">
+                <div class="calendar-header">
+                    <div class="calendar-title">📅 Daily Rewards</div>
+                    <div class="calendar-subtitle">Check in every day for 50x bonus!</div>
+                </div>
+                <div class="calendar-month">
+                    <button class="calendar-nav" id="prevMonth">‹</button>
+                    <span class="calendar-month-name" id="monthName">February 2026</span>
+                    <button class="calendar-nav" id="nextMonth">›</button>
+                </div>
+                <div class="calendar-weekdays">
+                    <div class="weekday">Sun</div><div class="weekday">Mon</div><div class="weekday">Tue</div>
+                    <div class="weekday">Wed</div><div class="weekday">Thu</div><div class="weekday">Fri</div><div class="weekday">Sat</div>
+                </div>
+                <div class="calendar-days" id="calendarDays"></div>
+                <button class="calendar-claim-btn" id="calendarClaimBtn">Claim Today's 50x Bonus</button>
+                <div class="calendar-info">
+                    <div class="calendar-info-text">
+                        <span class="calendar-info-highlight">Current Streak:</span> <span id="streakCount">0 days</span><br>
+                        <span class="calendar-info-highlight">Next Reward:</span> 50x Booster for 40 seconds
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- TASKS PAGE -->
+        <div class="page" id="tasksPage">
+            <div class="tasks-header">
+                <div class="tasks-title">📋 Tasks</div>
+            </div>
+            <div class="task-card" data-task="twitter">
+                <div class="task-icon x">𝕏</div>
+                <div class="task-details">
+                    <div class="task-name">Follow on X</div>
+                    <div class="task-reward">+5,000 Gold</div>
+                </div>
+                <button class="task-btn" id="twitterBtn">Follow</button>
+            </div>
+            <div class="task-card" data-task="telegram">
+                <div class="task-icon telegram">✈️</div>
+                <div class="task-details">
+                    <div class="task-name">Join Telegram Channel</div>
+                    <div class="task-reward">+5,000 Gold</div>
+                </div>
+                <button class="task-btn" id="telegramBtn">Join</button>
+            </div>
+            <div class="task-card" data-task="puzzle" id="puzzleTaskCard">
+                <div class="task-icon puzzle">🧩</div>
+                <div class="task-details">
+                    <div class="task-name">Daily Puzzle Challenge</div>
+                    <div class="task-reward">+200,000 Gold</div>
+                </div>
+                <button class="task-btn" id="puzzleBtn">Play</button>
+            </div>
+            <div class="task-card" data-task="watchad">
+                <div class="task-icon ads">📺</div>
+                <div class="task-details">
+                    <div class="task-name">Watch Advertisement</div>
+                    <div class="task-reward">+5,000 Gold</div>
+                </div>
+                <button class="task-btn" id="watchAdBtn">Watch</button>
+            </div>
+        </div>
+
+        <!-- PUZZLE PAGE -->
+        <div class="page" id="puzzlePage">
+            <div class="puzzle-container">
+                <div class="puzzle-header">
+                    <div class="puzzle-title">🧩 Memory Puzzle</div>
+                    <div class="puzzle-subtitle">Find all matching pairs to win 200K gold!</div>
+                </div>
+                <div class="puzzle-reward">
+                    <div class="puzzle-reward-amount">🏆 200,000 GOLD</div>
+                </div>
+                <div class="puzzle-info">
+                    <span class="puzzle-timer" id="puzzleTimer">Time: 60s</span>
+                    <span class="puzzle-attempts" id="puzzleAttempts">Moves: 0</span>
+                </div>
+                <div class="puzzle-grid" id="puzzleGrid"></div>
+                <button class="puzzle-btn" id="startPuzzleBtn">Start Puzzle</button>
+                <div class="puzzle-instructions">
+                    <strong>How to Play:</strong><br>
+                    • Tap tiles to reveal numbers<br>
+                    • Find matching pairs (1-1, 2-2, etc.)<br>
+                    • Match all pairs before time runs out<br>
+                    • Limited moves - think strategically!<br>
+                    • Win 200,000 gold for completing!
+                </div>
+            </div>
+        </div>
+
+        <!-- LEADERBOARD PAGE -->
+        <div class="page" id="leaderboardPage">
+            <div class="leaderboard-header">
+                <div class="leaderboard-title">🏆 Leaderboard</div>
+            </div>
+            <div class="leaderboard-tabs">
+                <button class="tab-btn active" data-tab="daily">Daily</button>
+                <button class="tab-btn" data-tab="weekly">Weekly</button>
+                <button class="tab-btn" data-tab="lifetime">Lifetime</button>
+            </div>
+            <div class="leaderboard-list" id="leaderboardList">
+                <div style="text-align: center; padding: 40px 20px; color: #888;">
+                    <div style="font-size: 48px; margin-bottom: 15px;">⏳</div>
+                    <div style="font-size: 16px; font-weight: 600;">Loading leaderboard...</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- BOOST PAGE -->
+        <div class="page" id="boostPage">
+            <div class="boost-header">
+                <div class="boost-title">🚀 Boosts</div>
+            </div>
+            <div class="boost-grid">
+                <div class="boost-card" data-boost="energy">
+                    <div class="boost-icon energy">⚡</div>
+                    <div class="boost-details">
+                        <div class="boost-name">Energy Limit</div>
+                        <div class="boost-desc">+500 energy capacity</div>
+                        <div class="boost-level">Level <span id="energyLevel">1</span></div>
+                    </div>
+                    <div class="boost-cost" id="energyCost">5K 🪙</div>
+                </div>
+                <div class="boost-card" data-boost="autoclicker">
+                    <div class="boost-icon autoclicker">🤖</div>
+                    <div class="boost-details">
+                        <div class="boost-name">Autoclicker</div>
+                        <div class="boost-desc" id="autoclickerDesc">150K gold/hour for 7 hours</div>
+                        <div class="boost-level">Level <span id="autoclickerLevel">0</span></div>
+                    </div>
+                    <div class="boost-cost" id="autoclickerCost">500K 🪙</div>
+                </div>
+            </div>
+        </div>
+
+        <div class="bottom-nav">
+            <div class="nav-item active" data-page="home" onclick="navigateTo('home')">
+                <span class="nav-icon">🦝</span>
+                <span class="nav-label">Tap</span>
+            </div>
+            <div class="nav-item" data-page="checkin" onclick="navigateTo('checkin')">
+                <span class="nav-icon">📅</span>
+                <span class="nav-label">Check-in</span>
+            </div>
+            <div class="nav-item" data-page="tasks" onclick="navigateTo('tasks')">
+                <span class="nav-icon">📋</span>
+                <span class="nav-label">Tasks</span>
+            </div>
+            <div class="nav-item" data-page="leaderboard" onclick="navigateTo('leaderboard')">
+                <span class="nav-icon">🏆</span>
+                <span class="nav-label">Leaders</span>
+            </div>
+            <div class="nav-item" data-page="boost" onclick="navigateTo('boost')">
+                <span class="nav-icon">🚀</span>
+                <span class="nav-label">Boost</span>
+            </div>
+        </div>
+    </div>
+
+    <!-- Username Modal -->
+    <div class="username-modal-overlay" id="usernameModal">
+        <div class="username-modal">
+            <div class="username-modal-icon">👤</div>
+            <div class="username-modal-title">Choose Your Username</div>
+            <div class="username-modal-desc">This will be displayed on the leaderboard.<br>3-20 characters, letters, numbers and underscores only.</div>
+            <div class="username-input-group">
+                <input type="text" class="username-input" id="usernameInput" placeholder="Enter username..." maxlength="20">
+                <div class="username-error" id="usernameError">Username is already taken or invalid</div>
+            </div>
+            <button class="username-btn" id="usernameSaveBtn" onclick="saveUsername()">Save Username</button>
+            <div class="username-skip" id="usernameSkip" onclick="skipUsername()">Skip for now</div>
+        </div>
+    </div>
+
+    <!-- Regular Modal -->
+    <div class="modal-overlay" id="modal">
+        <div class="modal">
+            <div class="modal-icon" id="modalIcon">🎉</div>
+            <div class="modal-title" id="modalTitle">Success!</div>
+            <div class="modal-desc" id="modalDesc">You got a reward!</div>
+            <button class="modal-btn confirm" onclick="closeModal()">OK</button>
+        </div>
+    </div>
+
+    <div class="toast" id="toast">Success!</div>
+
+    <script>
+        // ============================================
+        // GAME STATE
+        // ============================================
+        const gameState = {
+            gold: parseInt(localStorage.getItem('goldhunt_gold')) || 0,
+            energy: parseInt(localStorage.getItem('goldhunt_energy')) || 1000,
+            maxEnergy: parseInt(localStorage.getItem('goldhunt_maxEnergy')) || 1000,
+            earnPerTap: parseInt(localStorage.getItem('goldhunt_earnPerTap')) || 1,
+            profitPerHour: parseInt(localStorage.getItem('goldhunt_profitPerHour')) || 0,
+            totalTaps: parseInt(localStorage.getItem('goldhunt_totalTaps')) || 0,
+            referralCode: localStorage.getItem('goldhunt_referralCode') || null,
+            lastCheckin: localStorage.getItem('goldhunt_lastCheckin') || null,
+            checkinStreak: parseInt(localStorage.getItem('goldhunt_checkinStreak')) || 0,
+            boosterActive: false,
+            boosterMultiplier: 1,
+            boosterTimeLeft: 0,
+            autoclickerActive: false,
+            autoclickerEndTime: localStorage.getItem('goldhunt_autoclickerEndTime') || null,
+            autoclickerLevel: parseInt(localStorage.getItem('goldhunt_autoclickerLevel')) || 0,
+            boosts: JSON.parse(localStorage.getItem('goldhunt_boosts')) || { energy: { level: 1, cost: 5000 } },
+            referralCount: parseInt(localStorage.getItem('goldhunt_referralCount')) || 0,
+            referralGoldEarned: parseInt(localStorage.getItem('goldhunt_referralGoldEarned')) || 0,
+            referralsList: JSON.parse(localStorage.getItem('goldhunt_referralsList')) || [],
+            tasksCompleted: JSON.parse(localStorage.getItem('goldhunt_tasksCompleted')) || {},
+            walletAddress: localStorage.getItem('goldhunt_walletAddress') || null,
+            walletConnected: localStorage.getItem('goldhunt_walletConnected') === 'true',
+            telegramUserId: null,
+            username: null,
+            displayName: null,
+            lastPuzzleAttempt: localStorage.getItem('goldhunt_lastPuzzleAttempt') || null,
+            needsUsername: false
+        };
+
+        // ============================================
+        // ADSGRAM
+        // ============================================
+        let AdController = null;
+        function initAdsGram() {
+            if (window.Adsgram) {
+                try {
+                    AdController = window.Adsgram.init({ blockId: "23798" });
+                    console.log("✅ AdsGram SDK Initialized");
+                } catch (error) {
+                    console.error("❌ AdsGram init error:", error);
+                }
+            } else {
+                setTimeout(initAdsGram, 1000);
+            }
+        }
+        if (document.readyState === 'loading') {
+            document.addEventListener('DOMContentLoaded', initAdsGram);
+        } else {
+            initAdsGram();
+        }
+
+        function watchAdForReward() {
+            if (!AdController) {
+                showToast("⏳ Ad system loading...");
+                return;
+            }
+            showToast("📺 Loading advertisement...");
+            AdController.show()
+                .then((result) => {
+                    if (result.done) {
+                        const reward = 5000;
+                        gameState.gold += reward;
+                        saveGame();
+                        updateUI();
+                        showModal('🎉', 'Reward Earned!', `You received ${reward.toLocaleString()} gold!`);
+                    }
+                })
+                .catch((result) => {
+                    if (result.error) {
+                        showToast("❌ Error loading ad. Try again later.");
+                    } else {
+                        showToast("⚠️ You must watch the full ad to get the reward.");
+                    }
+                });
+        }
+
+        // ============================================
+        // AUDIO
+        // ============================================
+        const audioContext = new (window.AudioContext || window.webkitAudioContext)();
+        function playClickSound() {
+            if (audioContext.state === 'suspended') audioContext.resume();
+            const oscillator = audioContext.createOscillator();
+            const gainNode = audioContext.createGain();
+            oscillator.connect(gainNode);
+            gainNode.connect(audioContext.destination);
+            oscillator.frequency.setValueAtTime(800, audioContext.currentTime);
+            oscillator.frequency.exponentialRampToValueAtTime(1200, audioContext.currentTime + 0.1);
+            gainNode.gain.setValueAtTime(0.3, audioContext.currentTime);
+            gainNode.gain.exponentialRampToValueAtTime(0.01, audioContext.currentTime + 0.15);
+            oscillator.start(audioContext.currentTime);
+            oscillator.stop(audioContext.currentTime + 0.15);
+        }
+
+        // ============================================
+        // RANK SYSTEM
+        // ============================================
+        const rankSystem = [
+            { name: 'Wood', min: 0, max: 50000, icon: '🪵', boost: 1 },
+            { name: 'Gold Hunter', min: 50000, max: 200000, icon: '🥉', boost: 2 },
+            { name: 'Gold Thief', min: 200000, max: 1000000, icon: '🥈', boost: 5 },
+            { name: 'Master', min: 1000000, max: 5000000, icon: '🥇', boost: 10 },
+            { name: 'Grand Master', min: 5000000, max: 10000000, icon: '💎', boost: 15 },
+            { name: 'Elite', min: 10000000, max: Infinity, icon: '👑', boost: 20 }
+        ];
+
+        // ============================================
+        // ANTI-CHEAT
+        // ============================================
+        const antiCheat = {
+            tapTimes: [],
+            suspiciousActivity: 0,
+            maxTapsPerSecond: 25,
+            recordTap() {
+                const now = Date.now();
+                this.tapTimes.push(now);
+                this.tapTimes = this.tapTimes.filter(time => now - time < 5000);
+                const tapsInLastSecond = this.tapTimes.filter(time => now - time < 1000).length;
+                if (tapsInLastSecond > this.maxTapsPerSecond) {
+                    this.suspiciousActivity++;
+                    if (this.suspiciousActivity >= 5) {
+                        this.triggerAntiCheat();
+                        return false;
+                    }
+                }
+                if (this.tapTimes.length >= 5) {
+                    const intervals = [];
+                    for (let i = 1; i < this.tapTimes.length; i++) {
+                        intervals.push(this.tapTimes[i] - this.tapTimes[i-1]);
+                    }
+                    const mean = intervals.reduce((a, b) => a + b) / intervals.length;
+                    const variance = intervals.reduce((a, b) => a + Math.pow(b - mean, 2), 0) / intervals.length;
+                    if (variance < 5 && intervals.length > 3) {
+                        this.suspiciousActivity++;
+                        if (this.suspiciousActivity >= 5) {
+                            this.triggerAntiCheat();
+                            return false;
+                        }
+                    }
+                }
+                return true;
+            },
+            triggerAntiCheat() {
+                showToast('⚠️ Please tap at a normal pace');
+                this.suspiciousActivity = 0;
+                this.tapTimes = [];
+            }
+        };
+
+        // ============================================
+        // TON CONNECT
+        // ============================================
+        let tonConnectUI = null;
+        function initTonConnect() {
+            try {
+                const isTelegram = window.Telegram && window.Telegram.WebApp;
+                tonConnectUI = new TON_CONNECT_UI.TonConnectUI({
+                    manifestUrl: 'https://goldhuntpro.vercel.app/tonconnect-manifest.json',
+                    buttonRootId: 'ton-connect-button'
+                });
+                if (isTelegram) {
+                    tonConnectUI.uiOptions = {
+                        twaReturnUrl: 'https://t.me/Goldhunt101bot?startapp=main',
+                        returnStrategy: 'back'
+                    };
+                }
+                tonConnectUI.onStatusChange(async (wallet) => {
+                    if (wallet) {
+                        await handleWalletConnected(wallet.account.address);
+                    } else {
+                        handleWalletDisconnected();
+                    }
+                });
+                restoreWalletConnection();
+            } catch (error) {
+                console.error('❌ TON Connect initialization failed:', error);
+                showFallbackWalletButton();
+            }
+        }
+
+        async function restoreWalletConnection() {
+            try {
+                if (!tonConnectUI) return;
+                const wallet = await tonConnectUI.getWallet();
+                if (wallet && wallet.account) {
+                    await handleWalletConnected(wallet.account.address, null, true);
+                }
+            } catch (error) {
+                console.log('No previous wallet connection found');
+            }
+        }
+
+        async function handleWalletConnected(address, proof, isRestore = false) {
+            try {
+                gameState.walletAddress = address;
+                gameState.walletConnected = true;
+                localStorage.setItem('goldhunt_walletAddress', address);
+                localStorage.setItem('goldhunt_walletConnected', 'true');
+                if (!isRestore) showToast('✅ Wallet Connected!');
+                if (window.firestoreDB && gameState.telegramUserId) {
+                    await saveWalletToFirestore(address, proof);
+                }
+            } catch (error) {
+                console.error('Error handling wallet connection:', error);
+            }
+        }
+
+        function handleWalletDisconnected() {
+            gameState.walletAddress = null;
+            gameState.walletConnected = false;
+            localStorage.removeItem('goldhunt_walletAddress');
+            localStorage.removeItem('goldhunt_walletConnected');
+            showToast('🔌 Wallet Disconnected');
+        }
+
+        async function saveWalletToFirestore(address, proof) {
+            try {
+                const userRef = window.firestoreDoc(window.firestoreDB, 'users', gameState.telegramUserId.toString());
+                const updateData = {
+                    walletAddress: address,
+                    walletConnected: true,
+                    lastUpdated: window.serverTimestamp()
+                };
+                if (proof) updateData.tonProof = proof;
+                await window.firestoreUpdateDoc(userRef, updateData);
+            } catch (error) {
+                console.error('Error saving wallet to Firestore:', error);
+            }
+        }
+
+        function manualWalletConnect() {
+            if (tonConnectUI) {
+                tonConnectUI.openModal();
+            } else {
+                showModal('⚠️', 'Wallet Error', 'Unable to initialize wallet connection. Please try refreshing the page.');
+            }
+        }
+
+        function showFallbackWalletButton() {
+            const tonBtn = document.getElementById('ton-connect-button');
+            const fallbackBtn = document.getElementById('walletFallbackBtn');
+            if (tonBtn) tonBtn.style.display = 'none';
+            if (fallbackBtn) fallbackBtn.style.display = 'block';
+        }
+
+        // ============================================
+        // USERNAME MODAL FUNCTIONS
+        // ============================================
+        function showUsernameModal() {
+            document.getElementById('usernameModal').classList.add('active');
+            document.getElementById('usernameInput').value = '';
+            document.getElementById('usernameError').classList.remove('active');
+            
+            // Show skip button only if user already has a name
+            const hasName = gameState.username || gameState.displayName;
+            document.getElementById('usernameSkip').style.display = hasName ? 'block' : 'none';
+        }
+
+        function hideUsernameModal() {
+            document.getElementById('usernameModal').classList.remove('active');
+        }
+
+        async function saveUsername() {
+            const input = document.getElementById('usernameInput');
+            const username = input.value.trim();
+            const errorEl = document.getElementById('usernameError');
+            
+            // Validation
+            if (!username || username.length < 3) {
+                errorEl.textContent = 'Username must be at least 3 characters';
+                errorEl.classList.add('active');
+                return;
+            }
+            if (username.length > 20) {
+                errorEl.textContent = 'Username must be less than 20 characters';
+                errorEl.classList.add('active');
+                return;
+            }
+            if (!/^[a-zA-Z0-9_]+$/.test(username)) {
+                errorEl.textContent = 'Only letters, numbers and underscores allowed';
+                errorEl.classList.add('active');
+                return;
+            }
+            
+            // Check for inappropriate words (basic filter)
+            const inappropriate = ['admin', 'mod', 'support', 'official', 'goldhunt'];
+            if (inappropriate.some(word => username.toLowerCase().includes(word))) {
+                errorEl.textContent = 'This username is reserved';
+                errorEl.classList.add('active');
+                return;
+            }
+            
+            // Save to Firebase
+            const result = await window.updateUsername(username);
+            
+            if (result === 'taken') {
+                errorEl.textContent = 'Username is already taken';
+                errorEl.classList.add('active');
+                return;
+            }
+            if (result === false) {
+                errorEl.textContent = 'Error saving username. Try again.';
+                errorEl.classList.add('active');
+                return;
+            }
+            
+            // Success
+            gameState.username = username;
+            gameState.displayName = username;
+            gameState.needsUsername = false;
+            updateProfileDisplay();
+            hideUsernameModal();
+            showToast('✅ Username saved!');
+        }
+
+        function skipUsername() {
+            hideUsernameModal();
+        }
+
+        function updateProfileDisplay() {
+            const profileSection = document.getElementById('profileSection');
+            const profileName = document.getElementById('profileName');
+            const profileUsername = document.getElementById('profileUsername');
+            const profileAvatar = document.getElementById('profileAvatar');
+            
+            const displayName = gameState.displayName || gameState.username || window.playerName || 'Player';
+            const username = gameState.username || window.username;
+            
+            profileName.textContent = displayName;
+            profileUsername.textContent = username ? '@' + username : '@user_' + (gameState.telegramUserId || 'guest').toString().slice(-6);
+            
+            // Set avatar emoji based on first letter
+            const firstChar = displayName.charAt(0).toUpperCase();
+            profileAvatar.textContent = firstChar.match(/[A-Z]/) ? firstChar : '👤';
+            
+            profileSection.style.display = 'flex';
+        }
+
+        // ============================================
+        // INITIALIZATION
+        // ============================================
+        function initGame() {
+            console.log("🎮 Initializing game...");
+            
+            gameState.telegramUserId = window.telegramId;
+            gameState.username = window.username;
+            gameState.displayName = window.userDisplayName || window.username || window.playerName;
+            
+            if (!gameState.referralCode && gameState.telegramUserId) {
+                gameState.referralCode = 'GH' + gameState.telegramUserId.toString().slice(-6);
+                localStorage.setItem('goldhunt_referralCode', gameState.referralCode);
+            }
+            
+            if (window.existingReferralCount !== undefined) {
+                gameState.referralCount = window.existingReferralCount;
+            }
+            if (window.existingReferralGold !== undefined) {
+                gameState.referralGoldEarned = window.existingReferralGold;
+            }
+            
+            // Check for new referral rewards
+            if (window.newReferralAlert) {
+                setTimeout(() => {
+                    showModal('🎉', 'New Referral!', `Someone joined using your link! You earned ${window.newReferralAlert.gold.toLocaleString()} GOLD!`);
+                    gameState.gold += window.newReferralAlert.gold;
+                    gameState.referralGoldEarned += window.newReferralAlert.gold;
+                    window.newReferralAlert = null;
+                    saveGame();
+                }, 2000);
+            }
+            
+            // Show username modal if needed
+            if (window.showUsernameModal) {
+                setTimeout(() => {
+                    showUsernameModal();
+                }, 1000);
+            }
+            
+            // Update profile display
+            updateProfileDisplay();
+            
+            initTonConnect();
+            updateReferralDisplay();
+            loadRecentReferrals();
+            updateUI();
+            setupTapHandler();
+            
+            window.gameInitialized = true;
+        }
+
+        // ============================================
+        // TAP HANDLER
+        // ============================================
+        let lastTapTime = 0;
+        const tapCooldown = 30;
+
+        function setupTapHandler() {
+            const character = document.getElementById('characterContainer');
+            character.addEventListener('touchstart', handleTouch, { passive: false });
+            character.addEventListener('mousedown', handleMouse);
+        }
+
+        function handleTouch(e) {
+            e.preventDefault();
+            const touches = e.touches;
+            const now = Date.now();
+            for (let i = 0; i < touches.length; i++) {
+                if (now - lastTapTime > tapCooldown) {
+                    processTap(touches[i]);
+                    lastTapTime = now;
+                }
+            }
+        }
+
+        function handleMouse(e) {
+            const now = Date.now();
+            if (now - lastTapTime > tapCooldown) {
+                processTap(e);
+                lastTapTime = now;
+            }
+        }
+
+        function processTap(e) {
+            if (!antiCheat.recordTap()) {
+                showToast('⚠️ Slow down!');
+                return;
+            }
+            if (gameState.energy <= 0) {
+                showToast('⚡ No energy! Wait for recharge.');
+                return;
+            }
+
+            playClickSound();
+
+            const earned = getTotalEarnPerTap() * gameState.boosterMultiplier;
+            gameState.gold += earned;
+            gameState.energy--;
+            gameState.totalTaps++;
+
+            saveGame();
+            updateUI();
+
+            const rect = document.getElementById('characterContainer').getBoundingClientRect();
+            const clientX = e.clientX || (e.touches && e.touches[0].clientX);
+            const clientY = e.clientY || (e.touches && e.touches[0].clientY);
+            
+            const x = clientX - rect.left;
+            const y = clientY - rect.top;
+
+            const character = document.getElementById('characterContainer');
+            character.classList.add('tapping');
+            setTimeout(() => character.classList.remove('tapping'), 300);
+
+            createFloatingGold(x, y, earned);
+            createEnhancedParticles(x, y);
+            createCoinBurst(x, y);
+        }
+
+        function createFloatingGold(x, y, amount) {
+            const el = document.createElement('div');
+            el.className = 'floating-gold';
+            el.textContent = `+${amount}`;
+            el.style.left = x + 'px';
+            el.style.top = (y - 50) + 'px';
+            document.getElementById('characterContainer').appendChild(el);
+            setTimeout(() => el.remove(), 1000);
+        }
+
+        function createEnhancedParticles(x, y) {
+            for (let i = 0; i < 6; i++) {
+                const particle = document.createElement('div');
+                particle.className = 'particle gold';
+                particle.style.left = `${x}px`;
+                particle.style.top = `${y}px`;
+                const angle = (Math.PI * 2 * i) / 6;
+                const distance = 50 + Math.random() * 50;
+                particle.style.setProperty('--tx', `${Math.cos(angle) * distance}px`);
+                particle.style.setProperty('--ty', `${Math.sin(angle) * distance}px`);
+                document.getElementById('characterContainer').appendChild(particle);
+                setTimeout(() => particle.remove(), 600);
+            }
+            for (let i = 0; i < 3; i++) {
+                const sparkle = document.createElement('div');
+                sparkle.className = 'particle sparkle';
+                sparkle.style.left = `${x + (Math.random() - 0.5) * 40}px`;
+                sparkle.style.top = `${y + (Math.random() - 0.5) * 40}px`;
+                const angle = Math.random() * Math.PI * 2;
+                const distance = 30 + Math.random() * 30;
+                sparkle.style.setProperty('--tx', `${Math.cos(angle) * distance}px`);
+                sparkle.style.setProperty('--ty', `${Math.sin(angle) * distance}px`);
+                document.getElementById('characterContainer').appendChild(sparkle);
+                setTimeout(() => sparkle.remove(), 600);
+            }
+        }
+
+        function createCoinBurst(x, y) {
+            const burst = document.createElement('div');
+            burst.className = 'coin-burst';
+            burst.textContent = '$';
+            burst.style.left = `${x - 20}px`;
+            burst.style.top = `${y - 20}px`;
+            document.getElementById('characterContainer').appendChild(burst);
+            setTimeout(() => burst.remove(), 800);
+        }
+
+        // ============================================
+        // REFERRAL SYSTEM
+        // ============================================
+        function updateReferralDisplay() {
+            const linkEl = document.getElementById('referralLink');
+            const code = gameState.referralCode || 'GHXXXXXX';
+            const link = `https://t.me/Goldhunt101bot?start=${code}`;
+            linkEl.textContent = link;
+            document.getElementById('referralCount').textContent = gameState.referralCount;
+            document.getElementById('referralEarnings').textContent = gameState.referralGoldEarned.toLocaleString();
+        }
+
+        async function loadRecentReferrals() {
+            if (!window.firestoreDB || !gameState.telegramUserId) return;
+            try {
+                const userRef = window.firestoreDoc(window.firestoreDB, 'users', gameState.telegramUserId.toString());
+                const userSnap = await window.firestoreGetDoc(userRef);
+                if (userSnap.exists()) {
+                    const data = userSnap.data();
+                    const referrals = data.referrals || [];
+                    gameState.referralCount = data.referralCount || 0;
+                    gameState.referralGoldEarned = data.referralGoldEarned || 0;
+                    
+                    const recentReferrals = referrals.slice(-5).reverse();
+                    if (recentReferrals.length > 0) {
+                        const recentSection = document.getElementById('recentReferrals');
+                        const recentList = document.getElementById('recentReferralsList');
+                        recentSection.style.display = 'block';
+                        recentList.innerHTML = recentReferrals.map(ref => `
+                            <div class="recent-referral-item">
+                                <div class="recent-referral-name">${ref.username || 'User'}</div>
+                                <div class="recent-referral-amount">+${(ref.reward || 20000).toLocaleString()} GOLD</div>
+                            </div>
+                        `).join('');
+                    }
+                    updateReferralDisplay();
+                }
+            } catch (error) {
+                console.error('Error loading recent referrals:', error);
+            }
+        }
+
+        function copyReferralLink() {
+            const code = gameState.referralCode || 'GHXXXXXX';
+            const link = `https://t.me/Goldhunt101bot?start=${code}`;
+            const displayName = gameState.displayName || gameState.username || 'I';
+            const message = `🎮 Join me in GoldHunt!\n\n${displayName} invited you to play!\n\nUse code: ${code}\n\nStart playing: ${link}`;
+            
+            if (navigator.clipboard) {
+                navigator.clipboard.writeText(message).then(() => {
+                    showToast('📋 Copied! Share with friends');
+                }).catch(() => fallbackCopy(message));
+            } else {
+                fallbackCopy(message);
+            }
+        }
+
+        function fallbackCopy(text) {
+            const textarea = document.createElement('textarea');
+            textarea.value = text;
+            document.body.appendChild(textarea);
+            textarea.select();
+            document.execCommand('copy');
+            document.body.removeChild(textarea);
+            showToast('📋 Copied! Share with friends');
+        }
+
+        // ============================================
+        // UI FUNCTIONS
+        // ============================================
+        function getCurrentRank() {
+            for (let i = rankSystem.length - 1; i >= 0; i--) {
+                if (gameState.gold >= rankSystem[i].min) return rankSystem[i];
+            }
+            return rankSystem[0];
+        }
+
+        function getTotalEarnPerTap() {
+            return gameState.earnPerTap + getCurrentRank().boost;
+        }
+
+        function updateUI() {
+            document.getElementById('goldAmount').textContent = gameState.gold.toLocaleString();
+            document.getElementById('earnPerTap').textContent = '+' + getTotalEarnPerTap();
+            document.getElementById('totalTaps').textContent = gameState.totalTaps.toLocaleString();
+            document.getElementById('energyText').textContent = `${gameState.energy}/${gameState.maxEnergy}`;
+            document.getElementById('energyFill').style.width = `${(gameState.energy / gameState.maxEnergy) * 100}%`;
+            
+            const rank = getCurrentRank();
+            const badge = document.getElementById('rankBadge');
+            badge.innerHTML = `<span class="rank-icon">${rank.icon}</span><span class="rank-name">${rank.name}</span><span class="rank-boost">(+${rank.boost}/tap)</span>`;
+            
+            const nextRank = rankSystem.find(r => r.min > gameState.gold);
+            if (nextRank) {
+                const progress = ((gameState.gold - rank.min) / (nextRank.min - rank.min)) * 100;
+                document.getElementById('rankProgressFill').style.width = Math.min(progress, 100) + '%';
+                document.getElementById('rankProgressText').textContent = `${gameState.gold.toLocaleString()}/${nextRank.min.toLocaleString()}`;
+            } else {
+                document.getElementById('rankProgressFill').style.width = '100%';
+                document.getElementById('rankProgressText').textContent = 'MAX RANK!';
+            }
+
+            document.getElementById('energyLevel').textContent = gameState.boosts.energy.level;
+            document.getElementById('energyCost').textContent = `${(gameState.boosts.energy.cost / 1000).toFixed(0)}K 🪙`;
+            document.getElementById('autoclickerLevel').textContent = gameState.autoclickerLevel;
+            
+            const hourlyRate = getAutoclickerHourlyRate();
+            document.getElementById('autoclickerDesc').textContent = `${(hourlyRate / 1000).toFixed(0)}K gold/hour for 7 hours`;
+            
+            if (gameState.autoclickerActive) {
+                document.getElementById('autoclickerCost').textContent = 'Active';
+            } else {
+                document.getElementById('autoclickerCost').textContent = '500K 🪙';
+            }
+
+            updateAutoclickerIndicator();
+            updateTaskButtons();
+        }
+
+        function getAutoclickerHourlyRate() {
+            const baseRate = 150000;
+            const incrementPerLevel = 150000;
+            return baseRate + (gameState.autoclickerLevel * incrementPerLevel);
+        }
+
+        function updateAutoclickerIndicator() {
+            const indicator = document.getElementById('autoclickerIndicator');
+            if (gameState.autoclickerActive && gameState.autoclickerEndTime) {
+                const endTime = new Date(gameState.autoclickerEndTime);
+                const now = new Date();
+                const hoursLeft = Math.floor((endTime - now) / (1000 * 60 * 60));
+                const minutesLeft = Math.floor(((endTime - now) % (1000 * 60 * 60)) / (1000 * 60));
+                
+                if (hoursLeft > 0 || minutesLeft > 0) {
+                    indicator.classList.add('active');
+                    const rate = getAutoclickerHourlyRate();
+                    indicator.textContent = `🤖 ${(rate/1000).toFixed(0)}K/h: ${hoursLeft}h ${minutesLeft}m`;
+                } else {
+                    gameState.autoclickerActive = false;
+                    indicator.classList.remove('active');
+                    saveGame();
+                }
+            } else {
+                indicator.classList.remove('active');
+            }
+        }
+
+        function updateTaskButtons() {
+            const twitterBtn = document.getElementById('twitterBtn');
+            const telegramBtn = document.getElementById('telegramBtn');
+            const puzzleBtn = document.getElementById('puzzleBtn');
+            const watchAdBtn = document.getElementById('watchAdBtn');
+            
+            if (gameState.tasksCompleted.twitter) {
+                twitterBtn.textContent = '✅ Done';
+                twitterBtn.classList.add('completed');
+                twitterBtn.disabled = true;
+            }
+            if (gameState.tasksCompleted.telegram) {
+                telegramBtn.textContent = '✅ Done';
+                telegramBtn.classList.add('completed');
+                telegramBtn.disabled = true;
+            }
+            const lastPuzzle = gameState.lastPuzzleAttempt ? new Date(gameState.lastPuzzleAttempt) : null;
+            const now = new Date();
+            if (lastPuzzle && now.toDateString() === lastPuzzle.toDateString() && gameState.tasksCompleted.puzzle) {
+                puzzleBtn.textContent = '✅ Done';
+                puzzleBtn.classList.add('completed');
+                puzzleBtn.disabled = true;
+            }
+        }
+
+        function saveGame() {
+            localStorage.setItem('goldhunt_gold', gameState.gold);
+            localStorage.setItem('goldhunt_energy', gameState.energy);
+            localStorage.setItem('goldhunt_maxEnergy', gameState.maxEnergy);
+            localStorage.setItem('goldhunt_earnPerTap', gameState.earnPerTap);
+            localStorage.setItem('goldhunt_profitPerHour', gameState.profitPerHour);
+            localStorage.setItem('goldhunt_totalTaps', gameState.totalTaps);
+            localStorage.setItem('goldhunt_boosts', JSON.stringify(gameState.boosts));
+            localStorage.setItem('goldhunt_referralCount', gameState.referralCount);
+            localStorage.setItem('goldhunt_referralGoldEarned', gameState.referralGoldEarned);
+            localStorage.setItem('goldhunt_tasksCompleted', JSON.stringify(gameState.tasksCompleted));
+            localStorage.setItem('goldhunt_autoclickerEndTime', gameState.autoclickerEndTime);
+            localStorage.setItem('goldhunt_autoclickerLevel', gameState.autoclickerLevel);
+            localStorage.setItem('goldhunt_lastCheckin', gameState.lastCheckin);
+            localStorage.setItem('goldhunt_checkinStreak', gameState.checkinStreak);
+            localStorage.setItem('goldhunt_lastPuzzleAttempt', gameState.lastPuzzleAttempt);
+            
+            if (window.firestoreDB && gameState.telegramUserId) {
+                saveToFirestore();
+            }
+        }
+
+        async function saveToFirestore() {
+            try {
+                const userRef = window.firestoreDoc(window.firestoreDB, 'users', gameState.telegramUserId.toString());
+                await window.firestoreSetDoc(userRef, {
+                    telegramId: gameState.telegramUserId,
+                    username: gameState.username,
+                    displayName: gameState.displayName,
+                    gold: gameState.gold,
+                    energy: gameState.energy,
+                    totalTaps: gameState.totalTaps,
+                    referralCount: gameState.referralCount,
+                    referralGoldEarned: gameState.referralGoldEarned,
+                    walletAddress: gameState.walletAddress,
+                    lastUpdated: window.serverTimestamp()
+                }, { merge: true });
+            } catch (error) {
+                console.error('Firestore save error:', error);
+            }
+        }
+
+        // ============================================
+        // NAVIGATION
+        // ============================================
+        function navigateTo(page) {
+            document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+            document.getElementById(page + 'Page').classList.add('active');
+            document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
+            document.querySelector(`[data-page="${page}"]`).classList.add('active');
+
+            if (page === 'leaderboard') {
+                loadLeaderboard('daily');
+            } else if (page === 'checkin') {
+                initCalendar();
+            } else if (page === 'home') {
+                loadRecentReferrals();
+            }
+        }
+
+        // ============================================
+        // CALENDAR
+        // ============================================
+        let currentCalendarDate = new Date();
+        const monthNames = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
+
+        function initCalendar() {
+            renderCalendar(currentCalendarDate);
+            updateCalendarClaimButton();
+        }
+
+        function renderCalendar(date) {
+            const year = date.getFullYear();
+            const month = date.getMonth();
+            document.getElementById('monthName').textContent = `${monthNames[month]} ${year}`;
+            
+            const firstDay = new Date(year, month, 1).getDay();
+            const daysInMonth = new Date(year, month + 1, 0).getDate();
+            const today = new Date();
+            
+            const calendarDays = document.getElementById('calendarDays');
+            calendarDays.innerHTML = '';
+            
+            for (let i = 0; i < firstDay; i++) {
+                calendarDays.appendChild(document.createElement('div'));
+            }
+            
+            for (let day = 1; day <= daysInMonth; day++) {
+                const dayElement = document.createElement('div');
+                dayElement.className = 'calendar-day';
+                
+                const currentDate = new Date(year, month, day);
+                const dateString = currentDate.toDateString();
+                const todayString = today.toDateString();
+                const lastCheckin = gameState.lastCheckin ? new Date(gameState.lastCheckin).toDateString() : null;
+                
+                if (dateString === todayString) {
+                    dayElement.classList.add('today');
+                    const bonus = document.createElement('div');
+                    bonus.className = 'day-bonus';
+                    bonus.textContent = '50x';
+                    dayElement.appendChild(bonus);
+                }
+                if (lastCheckin === dateString) {
+                    dayElement.classList.add('claimed');
+                    const icon = document.createElement('span');
+                    icon.className = 'day-icon';
+                    icon.textContent = '✅';
+                    dayElement.appendChild(icon);
+                }
+                if (currentDate > today) dayElement.classList.add('future');
+                if (currentDate < today && lastCheckin !== dateString) dayElement.classList.add('past');
+                
+                const dayNum = document.createElement('div');
+                dayNum.className = 'day-number';
+                dayNum.textContent = day;
+                dayElement.appendChild(dayNum);
+                
+                dayElement.addEventListener('click', () => {
+                    if (dateString === todayString && lastCheckin !== dateString) {
+                        claimDailyReward();
+                    }
+                });
+                calendarDays.appendChild(dayElement);
+            }
+        }
+
+        function updateCalendarClaimButton() {
+            const claimBtn = document.getElementById('calendarClaimBtn');
+            const today = new Date().toDateString();
+            const lastCheckin = gameState.lastCheckin ? new Date(gameState.lastCheckin).toDateString() : null;
+            
+            if (lastCheckin === today) {
+                claimBtn.textContent = '✅ Already Claimed Today';
+                claimBtn.disabled = true;
+                claimBtn.classList.add('claimed');
+            } else {
+                claimBtn.textContent = 'Claim Today\'s 50x Bonus';
+                claimBtn.disabled = false;
+                claimBtn.classList.remove('claimed');
+            }
+            document.getElementById('streakCount').textContent = `${gameState.checkinStreak} days`;
+        }
+
+        function claimDailyReward() {
+            const today = new Date();
+            const lastCheckin = gameState.lastCheckin ? new Date(gameState.lastCheckin) : null;
+            
+            if (lastCheckin) {
+                const yesterday = new Date(today);
+                yesterday.setDate(yesterday.getDate() - 1);
+                if (lastCheckin.toDateString() === yesterday.toDateString()) {
+                    gameState.checkinStreak++;
+                } else if (lastCheckin.toDateString() !== today.toDateString()) {
+                    gameState.checkinStreak = 1;
+                }
+            } else {
+                gameState.checkinStreak = 1;
+            }
+            
+            gameState.lastCheckin = today.toISOString();
+            activateBooster(50, 40);
+            saveGame();
+            updateCalendarClaimButton();
+            renderCalendar(currentCalendarDate);
+            showModal('🎁', 'Daily Check-in!', `You received a 50x booster for 40 seconds! Streak: ${gameState.checkinStreak} days`);
+        }
+
+        document.getElementById('prevMonth').addEventListener('click', () => {
+            currentCalendarDate.setMonth(currentCalendarDate.getMonth() - 1);
+            renderCalendar(currentCalendarDate);
+        });
+
+        document.getElementById('nextMonth').addEventListener('click', () => {
+            currentCalendarDate.setMonth(currentCalendarDate.getMonth() + 1);
+            renderCalendar(currentCalendarDate);
+        });
+
+        document.getElementById('calendarClaimBtn').addEventListener('click', claimDailyReward);
+
+        // ============================================
+        // BOOSTER
+        // ============================================
+        function activateBooster(multiplier, duration) {
+            gameState.boosterActive = true;
+            gameState.boosterMultiplier = multiplier;
+            gameState.boosterTimeLeft = duration;
+            
+            document.getElementById('boosterRing').classList.add('active');
+            document.getElementById('boosterTimer').classList.add('active');
+            
+            const boosterInterval = setInterval(() => {
+                gameState.boosterTimeLeft--;
+                document.getElementById('boosterTimer').textContent = `${gameState.boosterMultiplier}x: ${gameState.boosterTimeLeft}s`;
+                
+                if (gameState.boosterTimeLeft <= 0) {
+                    clearInterval(boosterInterval);
+                    gameState.boosterActive = false;
+                    gameState.boosterMultiplier = 1;
+                    document.getElementById('boosterRing').classList.remove('active');
+                    document.getElementById('boosterTimer').classList.remove('active');
+                    updateUI();
+                }
+            }, 1000);
+            updateUI();
+        }
+
+        // ============================================
+        // LEADERBOARD
+        // ============================================
+        async function loadLeaderboard(type) {
+            const list = document.getElementById('leaderboardList');
+            if (!window.firestoreDB) {
+                setTimeout(() => loadLeaderboard(type), 1000);
+                return;
+            }
+            try {
+                const usersRef = window.firestoreCollection(window.firestoreDB, 'users');
+                const q = window.firestoreQuery(usersRef, window.firestoreOrderBy('gold', 'desc'), window.firestoreLimit(10));
+                const querySnapshot = await window.firestoreGetDocs(q);
+                
+                const players = [];
+                querySnapshot.forEach((doc) => {
+                    players.push(doc.data());
+                });
+                
+                if (players.length === 0) {
+                    list.innerHTML = `<div style="text-align: center; padding: 40px 20px; color: #888;"><div style="font-size: 48px; margin-bottom: 15px;">📊</div><div>No players yet. Be the first!</div></div>`;
+                } else {
+                    renderLeaderboard(players);
+                }
+            } catch (error) {
+                console.error('Leaderboard load error:', error);
+                list.innerHTML = `<div style="text-align: center; padding: 40px 20px; color: #888;"><div style="font-size: 48px; margin-bottom: 15px;">⏳</div><div>Loading...</div></div>`;
+            }
+        }
+
+        function renderLeaderboard(data) {
+            const list = document.getElementById('leaderboardList');
+            list.innerHTML = data.map((player, index) => {
+                const rank = rankSystem.find(r => player.gold >= r.min) || rankSystem[0];
+                // Use displayName, username, playerName, or fallback
+                const displayName = player.displayName || player.username || player.playerName || 'Anonymous';
+                return `
+                <div class="leaderboard-item">
+                    <div class="rank ${index === 0 ? 'gold' : index === 1 ? 'silver' : index === 2 ? 'bronze' : 'other'}">${index + 1}</div>
+                    <div class="player-info">
+                        <div class="player-name">${displayName}</div>
+                        <div class="player-rank-badge">${rank.icon} ${rank.name}</div>
+                    </div>
+                    <div class="player-gold">${(player.gold || 0).toLocaleString()} 🪙</div>
+                </div>
+                `;
+            }).join('');
+        }
+
+        document.querySelectorAll('.tab-btn').forEach(btn => {
+            btn.addEventListener('click', () => {
+                document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+                btn.classList.add('active');
+                loadLeaderboard(btn.dataset.tab);
+            });
+        });
+
+        // ============================================
+        // BOOSTS
+        // ============================================
+        document.querySelectorAll('.boost-card').forEach(card => {
+            card.addEventListener('click', () => {
+                const boostType = card.dataset.boost;
+                
+                if (boostType === 'autoclicker') {
+                    if (gameState.autoclickerActive) {
+                        showToast('⏰ Autoclicker already active!');
+                        return;
+                    }
+                    if (gameState.gold >= 500000) {
+                        gameState.gold -= 500000;
+                        gameState.autoclickerActive = true;
+                        const endTime = new Date();
+                        endTime.setHours(endTime.getHours() + 7);
+                        gameState.autoclickerEndTime = endTime.toISOString();
+                        saveGame();
+                        updateUI();
+                        const rate = getAutoclickerHourlyRate();
+                        showModal('🤖', 'Autoclicker Activated!', `Auto-tapping for 7 hours at ${(rate/1000).toFixed(0)}K gold/hour!`);
+                    } else {
+                        showToast('❌ Need 500K gold!');
+                    }
+                    return;
+                }
+                
+                const boost = gameState.boosts[boostType];
+                if (gameState.gold >= boost.cost) {
+                    gameState.gold -= boost.cost;
+                    boost.level++;
+                    boost.cost = Math.floor(boost.cost * 1.5);
+                    
+                    if (boostType === 'energy') {
+                        gameState.maxEnergy += 500;
+                        gameState.energy += 500;
+                    }
+                    saveGame();
+                    updateUI();
+                    showToast(`🚀 ${boostType.charAt(0).toUpperCase() + boostType.slice(1)} upgraded!`);
+                } else {
+                    showToast('❌ Not enough gold!');
+                }
+            });
+        });
+
+        // ============================================
+        // TASKS
+        // ============================================
+        document.getElementById('twitterBtn').addEventListener('click', () => {
+            if (!gameState.tasksCompleted.twitter) {
+                window.open('https://x.com/GoldhuntAirdrop', '_blank');
+                setTimeout(() => {
+                    gameState.tasksCompleted.twitter = true;
+                    gameState.gold += 5000;
+                    saveGame();
+                    updateUI();
+                    showModal('✅', 'Task Completed!', 'You earned 5,000 gold!');
+                }, 3000);
+            }
+        });
+
+        document.getElementById('telegramBtn').addEventListener('click', () => {
+            if (!gameState.tasksCompleted.telegram) {
+                window.open('https://t.me/Goldhunt101', '_blank');
+                setTimeout(() => {
+                    gameState.tasksCompleted.telegram = true;
+                    gameState.gold += 5000;
+                    saveGame();
+                    updateUI();
+                    showModal('✅', 'Task Completed!', 'You earned 5,000 gold!');
+                }, 3000);
+            }
+        });
+
+        document.getElementById('watchAdBtn').addEventListener('click', watchAdForReward);
+
+        document.getElementById('puzzleBtn').addEventListener('click', () => {
+            const lastPuzzle = gameState.lastPuzzleAttempt ? new Date(gameState.lastPuzzleAttempt) : null;
+            const now = new Date();
+            if (lastPuzzle && now.toDateString() === lastPuzzle.toDateString() && gameState.tasksCompleted.puzzle) {
+                showToast('🧩 Puzzle already completed today!');
+                return;
+            }
+            navigateTo('puzzle');
+            initPuzzle();
+        });
+
+        // ============================================
+        // PUZZLE GAME
+        // ============================================
+        const puzzleState = {
+            grid: [],
+            selectedTile: null,
+            matchedPairs: 0,
+            moves: 0,
+            timeLeft: 60,
+            timerInterval: null,
+            isPlaying: false,
+            maxMoves: 30
+        };
+        const puzzleEmojis = ['💎', '🪙', '💰', '👑', '🗝️', '🏆', '💍', '📿'];
+
+        function initPuzzle() {
+            const grid = document.getElementById('puzzleGrid');
+            grid.innerHTML = '';
+            
+            const pairs = [...puzzleEmojis, ...puzzleEmojis];
+            for (let i = pairs.length - 1; i > 0; i--) {
+                const j = Math.floor(Math.random() * (i + 1));
+                [pairs[i], pairs[j]] = [pairs[j], pairs[i]];
+            }
+            
+            puzzleState.grid = pairs;
+            puzzleState.selectedTile = null;
+            puzzleState.matchedPairs = 0;
+            puzzleState.moves = 0;
+            puzzleState.timeLeft = 60;
+            puzzleState.isPlaying = true;
+            
+            pairs.forEach((emoji, index) => {
+                const tile = document.createElement('div');
+                tile.className = 'puzzle-tile';
+                tile.dataset.index = index;
+                tile.dataset.emoji = emoji;
+                tile.textContent = '?';
+                tile.addEventListener('click', () => handleTileClick(tile));
+                grid.appendChild(tile);
+            });
+            
+            updatePuzzleUI();
+            startPuzzleTimer();
+            document.getElementById('startPuzzleBtn').textContent = 'Restart Puzzle';
+        }
+
+        function handleTileClick(tile) {
+            if (!puzzleState.isPlaying || tile.classList.contains('correct') || tile === puzzleState.selectedTile) return;
+            
+            tile.textContent = tile.dataset.emoji;
+            tile.classList.add('selected');
+            
+            if (!puzzleState.selectedTile) {
+                puzzleState.selectedTile = tile;
+            } else {
+                puzzleState.moves++;
+                const firstTile = puzzleState.selectedTile;
+                const secondTile = tile;
+                
+                if (firstTile.dataset.emoji === secondTile.dataset.emoji) {
+                    setTimeout(() => {
+                        firstTile.classList.remove('selected');
+                        secondTile.classList.remove('selected');
+                        firstTile.classList.add('correct');
+                        secondTile.classList.add('correct');
+                        puzzleState.matchedPairs++;
+                        puzzleState.selectedTile = null;
+                        
+                        if (puzzleState.matchedPairs === 8) {
+                            endPuzzle(true);
+                        }
+                    }, 500);
+                } else {
+                    setTimeout(() => {
+                        firstTile.classList.remove('selected');
+                        secondTile.classList.remove('selected');
+                        firstTile.textContent = '?';
+                        secondTile.textContent = '?';
+                        firstTile.classList.add('wrong');
+                        secondTile.classList.add('wrong');
+                        setTimeout(() => {
+                            firstTile.classList.remove('wrong');
+                            secondTile.classList.remove('wrong');
+                        }, 500);
+                        puzzleState.selectedTile = null;
+                    }, 800);
+                }
+                updatePuzzleUI();
+                if (puzzleState.moves >= puzzleState.maxMoves) {
+                    endPuzzle(false);
+                }
+            }
+        }
+
+        function startPuzzleTimer() {
+            if (puzzleState.timerInterval) clearInterval(puzzleState.timerInterval);
+            puzzleState.timerInterval = setInterval(() => {
+                puzzleState.timeLeft--;
+                updatePuzzleUI();
+                if (puzzleState.timeLeft <= 0) {
+                    endPuzzle(false);
+                }
+            }, 1000);
+        }
+
+        function updatePuzzleUI() {
+            document.getElementById('puzzleTimer').textContent = `Time: ${puzzleState.timeLeft}s`;
+            document.getElementById('puzzleAttempts').textContent = `Moves: ${puzzleState.moves}/${puzzleState.maxMoves}`;
+        }
+
+        function endPuzzle(won) {
+            puzzleState.isPlaying = false;
+            clearInterval(puzzleState.timerInterval);
+            
+            if (won) {
+                gameState.gold += 200000;
+                gameState.tasksCompleted.puzzle = true;
+                gameState.lastPuzzleAttempt = new Date().toISOString();
+                saveGame();
+                updateUI();
+                showModal('🎉', 'Puzzle Complete!', 'You won 200,000 gold! Amazing memory skills!');
+            } else {
+                showModal('😢', 'Puzzle Failed!', 'Time\'s up or too many moves! Try again tomorrow.');
+            }
+            
+            setTimeout(() => {
+                navigateTo('tasks');
+            }, 2000);
+        }
+
+        document.getElementById('startPuzzleBtn').addEventListener('click', initPuzzle);
+
+        // ============================================
+        // ENERGY RECHARGE & AUTO PROFIT
+        // ============================================
+        setInterval(() => {
+            if (gameState.energy < gameState.maxEnergy) {
+                gameState.energy++;
+                saveGame();
+                updateUI();
+            }
+        }, 2000);
+
+        setInterval(() => {
+            if (gameState.profitPerHour > 0) {
+                const profit = Math.floor(gameState.profitPerHour / 3600);
+                gameState.gold += profit;
+                saveGame();
+                updateUI();
+            }
+        }, 1000);
+
+        // ============================================
+        // AUTOCLICKER
+        // ============================================
+        setInterval(() => {
+            if (gameState.autoclickerActive && gameState.autoclickerEndTime) {
+                const endTime = new Date(gameState.autoclickerEndTime);
+                const now = new Date();
+                
+                if (now < endTime && gameState.energy > 0) {
+                    const hourlyRate = getAutoclickerHourlyRate();
+                    const earned = Math.floor(hourlyRate / 3600);
+                    gameState.gold += earned;
+                    gameState.energy--;
+                    gameState.totalTaps++;
+                    saveGame();
+                    updateUI();
+                    
+                    const character = document.getElementById('characterContainer');
+                    character.classList.add('tapping');
+                    setTimeout(() => character.classList.remove('tapping'), 100);
+                    
+                    const rect = character.getBoundingClientRect();
+                    createEnhancedParticles(rect.width / 2, rect.height / 2);
+                } else if (now >= endTime) {
+                    gameState.autoclickerActive = false;
+                    gameState.autoclickerLevel++;
+                    saveGame();
+                    updateUI();
+                    showToast('⏰ Autoclicker expired! Level up available!');
+                }
+            }
+        }, 1000);
+
+        // ============================================
+        // MODAL & TOAST
+        // ============================================
+        function showModal(icon, title, desc) {
+            document.getElementById('modalIcon').textContent = icon;
+            document.getElementById('modalTitle').textContent = title;
+            document.getElementById('modalDesc').textContent = desc;
+            document.getElementById('modal').classList.add('active');
+        }
+
+        function closeModal() {
+            document.getElementById('modal').classList.remove('active');
+        }
+
+        function showToast(message) {
+            const toast = document.getElementById('toast');
+            toast.textContent = message;
+            toast.classList.add('show');
+            setTimeout(() => toast.classList.remove('show'), 3000);
+        }
+
+        // Enter key on username input
+        document.getElementById('usernameInput').addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') saveUsername();
+        });
+
+        // ============================================
+        // START
+        // ============================================
+        window.addEventListener('firebaseHookReady', initGame);
+        setTimeout(() => {
+            if (!window.gameInitialized) initGame();
+        }, 3000);
+    </script>
+</body>
+</html>
